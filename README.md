@@ -12,8 +12,8 @@ pip install -r requirements.txt
 
 Place the official data under `cs230_data/`, e.g.:
 
-- `cs230_data/almrrc2021-data-train/model_build_inputs/{route_data.json, package_data.json, actual_sequences.json}`
-- `cs230_data/almrrc2021-data-eval/model_build_inputs/{route_data.json, package_data.json, actual_sequences.json}`
+- `cs230_data/almrrc2021-data-training/model_build_inputs/{route_data.json, package_data.json, actual_sequences.json}`
+- `cs230_data/almrrc2021-data-evaluation/model_apply_inputs/{eval_route_data.json, eval_package_data.json, eval_travel_times.json}`
 
 ## Baseline (JSON)
 
