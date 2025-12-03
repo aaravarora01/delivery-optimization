@@ -107,6 +107,8 @@ def evaluate_zone_predictions(
     
     # Reset index to ensure proper indexing
     zone_df = zone_df.reset_index(drop=True).copy()
+    if len(zone_df) < 2:
+        raise ValueError("Zone has fewer than 2 stops; cannot evaluate.")
     
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32, device=device).unsqueeze(0)
     
@@ -121,7 +123,7 @@ def evaluate_zone_predictions(
     # Decode
     with torch.no_grad():
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
-        pred_order_indices = pred_order_indices.squeeze(0).cpu().numpy().tolist()
+        pred_order_indices = pred_order_indices.reshape(-1).tolist()
     
     # Get stop_ids in predicted and true order
     stop_ids = zone_df['stop_id'].tolist()

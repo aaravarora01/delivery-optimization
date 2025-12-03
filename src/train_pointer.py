@@ -193,7 +193,7 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4, help="Learning rate (full rate, not scaled)")
     ap.add_argument("--weight_decay", type=float, default=1e-3)
     ap.add_argument("--batch_size", type=int, default=32, help="Effective batch size via gradient accumulation")
-    ap.add_argument("--num_workers", type=int, default=8, help="Number of data loader workers")
+    ap.add_argument("--num_workers", type=int, default=2, help="Number of data loader workers (reduced for memory)")
     
     # Model args
     ap.add_argument("--use_gnn", action="store_true")
@@ -205,7 +205,7 @@ def main():
     ap.add_argument("--dropout", type=float, default=0.1)
     
     # Data args
-    ap.add_argument("--max_zone", type=int, default=80, help="Maximum zone size (increased from 40)")
+    ap.add_argument("--max_zone", type=int, default=60, help="Maximum zone size (reduced for memory)")
     ap.add_argument("--max_routes", type=int, default=None, help="Limit number of routes (None = use all training data)")
     ap.add_argument("--val_split", type=float, default=0.1, help="Fraction of routes to use for validation")
     ap.add_argument("--val_eval_freq", type=int, default=1, help="Evaluate validation every N epochs")
@@ -299,6 +299,19 @@ def main():
         model = PointerTransformer(d_in=d_node, cfg=pt_config).to(args.device)
         params = list(model.parameters())
     
+    # Initialize weights properly to prevent NaN
+    def init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight, gain=0.1)  # Smaller gain for stability
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0.0)
+        elif isinstance(m, nn.Parameter):
+            nn.init.normal_(m, mean=0.0, std=0.01)  # Small initialization for query_start
+    
+    model.apply(init_weights)
+    if gnn:
+        gnn.apply(init_weights)
+    
     # Compile model if requested (PyTorch 2.0+)
     if args.compile and hasattr(torch, 'compile'):
         print("Compiling model with torch.compile...")
@@ -329,14 +342,30 @@ def main():
     model.train()
     best_val_tau = -1.0
     
+    # Create DataLoader once - don't recreate each epoch to save memory
+    # Use a sampler that shuffles each epoch instead
+    from torch.utils.data import RandomSampler
+    train_sampler = RandomSampler(train_dataset, replacement=False)
+    
+    train_dataloader = DataLoader(
+        train_dataset, 
+        batch_size=1,
+        sampler=train_sampler,  # Use sampler instead of shuffle=True
+        num_workers=min(4, args.num_workers),  # Reduce workers to save memory
+        pin_memory=True if args.device == "cuda" else False,
+        persistent_workers=False,  # Don't persist to save memory
+    )
+    
     for epoch in range(1, args.epochs + 1):
-        # Create new dataloader each epoch for shuffling
-        epoch_dataloader = DataLoader(
-            train_dataset, 
+        # Create new sampler each epoch for shuffling (lighter than new DataLoader)
+        train_sampler = RandomSampler(train_dataset, replacement=False)
+        train_dataloader = DataLoader(
+            train_dataset,
             batch_size=1,
-            shuffle=True,  # Shuffle each epoch
-            num_workers=args.num_workers,
+            sampler=train_sampler,
+            num_workers=min(4, args.num_workers),
             pin_memory=True if args.device == "cuda" else False,
+            persistent_workers=False,
         )
         
         total_loss = 0.0
@@ -344,7 +373,7 @@ def main():
         count = 0
         step_count = 0
         
-        for batch_idx, (coords, target_idx) in enumerate(epoch_dataloader):
+        for batch_idx, (coords, target_idx) in enumerate(train_dataloader):
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
@@ -367,6 +396,7 @@ def main():
             if args.use_gnn:
                 adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
                 X = gnn(X, adj.to(args.device))
+                del adj  # Free memory
             
             edge_feats = edge_bias_features(coords)
             
@@ -377,8 +407,12 @@ def main():
             else:
                 loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
+            # Free intermediate tensors
+            del X, edge_feats
+            
             # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
+                del loss
                 continue
             
             # Scale loss for gradient accumulation
@@ -424,14 +458,15 @@ def main():
             opt.zero_grad()
             total_loss += accumulated_loss
         
-        scheduler.step()
-        avg_loss = total_loss / max(1, count)
-        current_lr = scheduler.get_last_lr()[0]
+        # Clean up DataLoader and free memory
+        del train_dataloader
+        if args.device == "cuda":
+            torch.cuda.empty_cache()
+        import gc
+        gc.collect()
         
-        # Track training metrics
-        training_metrics['epoch'].append(epoch)
-        training_metrics['train_loss'].append(avg_loss)
-        training_metrics['learning_rate'].append(current_lr)
+        avg_loss = total_loss / max(1, count)
+        performed_update = step_count > 0
         
         # Validation evaluation
         val_metrics_dict = {}
@@ -498,6 +533,18 @@ def main():
             model.train()
             if gnn:
                 gnn.train()
+        
+        if performed_update:
+            scheduler.step()
+            current_lr = scheduler.get_last_lr()[0]
+        else:
+            print("Skipping scheduler step: no batches processed this epoch.")
+            current_lr = opt.param_groups[0]['lr']
+        
+        # Track training metrics
+        training_metrics['epoch'].append(epoch)
+        training_metrics['train_loss'].append(avg_loss)
+        training_metrics['learning_rate'].append(current_lr)
         
         print(f"Epoch {epoch}/{args.epochs} - Avg Loss: {avg_loss:.4f}, LR: {current_lr:.6f}, Zones Processed: {count}\n")
     
