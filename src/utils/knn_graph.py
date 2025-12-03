@@ -7,6 +7,11 @@ import math, torch
 def haversine_torch(latlon):  # (B,N,2) in radians
 
     # pairwise distances in km
+    # Ensure input is exactly 3D (B, N, 2)
+    while latlon.dim() > 3:
+        latlon = latlon.squeeze(0)
+    if latlon.dim() < 3:
+        raise ValueError(f"Expected 3D tensor (B, N, 2), got {latlon.dim()}D tensor with shape {latlon.shape}")
 
     B,N,_ = latlon.shape
 
@@ -31,10 +36,19 @@ def knn_adj(latlon_deg, k=8):
     latlon_deg: (B,N,2) degrees; returns adj (B,N,N) row-normalized.
 
     """
+    # Ensure input is exactly 3D (B, N, 2)
+    while latlon_deg.dim() > 3:
+        latlon_deg = latlon_deg.squeeze(0)
+    if latlon_deg.dim() < 3:
+        raise ValueError(f"Expected 3D tensor (B, N, 2), got {latlon_deg.dim()}D tensor with shape {latlon_deg.shape}")
 
     latlon = latlon_deg * (math.pi/180.0)
 
     D = haversine_torch(latlon)  # (B,N,N)
+    
+    # Ensure D is exactly 3D (B, N, N)
+    while D.dim() > 3:
+        D = D.squeeze(0)
 
     # mask self
 

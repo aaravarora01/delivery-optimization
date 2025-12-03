@@ -323,7 +323,7 @@ def main():
     print(f"  Batch size (gradient accumulation): {args.batch_size}")
     print(f"  Max zone size: {args.max_zone}")
     print(f"  Mixed precision: {args.mixed_precision}")
-    print(f"  Total zones: {len(dataset.zones)}")
+    print(f"  Total zones: {len(train_dataset.zones)}")
     print(f"{'='*60}\n")
     
     model.train()
@@ -347,6 +347,19 @@ def main():
         for batch_idx, (coords, target_idx) in enumerate(epoch_dataloader):
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
+            
+            # Squeeze extra batch dimension if DataLoader added one
+            # collate_zone already adds batch dim, so DataLoader creates (1, 1, N, 2) -> (1, N, 2)
+            if coords.dim() == 4:  # (1, 1, N, 2) -> (1, N, 2)
+                coords = coords.squeeze(0)
+            # Ensure coords is exactly 3D (B, N, 2) - squeeze any extra leading dimensions
+            while coords.dim() > 3:
+                coords = coords.squeeze(0)
+            
+            # Only squeeze target_idx if it has 3 dimensions (1, 1, N) -> (1, N)
+            # Don't squeeze if it's already (1, N) as we need the batch dimension
+            if target_idx.dim() == 3:  # (1, 1, N) -> (1, N)
+                target_idx = target_idx.squeeze(0)
             
             # Features
             X = node_features(coords)

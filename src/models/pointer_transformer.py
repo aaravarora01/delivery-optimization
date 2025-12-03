@@ -183,8 +183,16 @@ class PointerTransformer(nn.Module):
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
 
             y = target_idx[:, t]  # (B,)
-
-            loss += F.cross_entropy(logits, y, label_smoothing=0.05)
+            
+            # Convert to one-hot for label smoothing
+            num_classes = logits.size(-1)
+            y_one_hot = torch.zeros(logits.size(0), num_classes, device=logits.device)
+            y_one_hot.scatter_(1, y.unsqueeze(1), 1.0)
+            y_one_hot = y_one_hot * (1 - 0.05) + 0.05 / num_classes  # Apply label smoothing
+            
+            # Compute cross-entropy loss with smoothed one-hot targets
+            log_probs = F.log_softmax(logits, dim=-1)
+            loss += -(y_one_hot * log_probs).sum(dim=-1).mean()
 
             # Check for invalid logits
             if torch.isnan(logits).any() or torch.isinf(logits).any():
