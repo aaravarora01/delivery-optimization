@@ -123,7 +123,10 @@ def evaluate_zone_predictions(
     # Decode
     with torch.no_grad():
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
+        # Debug: check shape before reshape
+        print(f"DEBUG: pred_order_indices shape before reshape: {pred_order_indices.shape}, zone size: {len(zone_df)}")
         pred_order_indices = pred_order_indices.reshape(-1).cpu().numpy().tolist()
+        print(f"DEBUG: pred_order_indices length after reshape: {len(pred_order_indices)}")
     
     # Validate indices are in range
     num_stops = len(zone_df)
