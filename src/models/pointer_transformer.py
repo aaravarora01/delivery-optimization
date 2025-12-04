@@ -401,18 +401,31 @@ class PointerTransformer(nn.Module):
             print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
         
         if B == 1:
-            # Ensure seq is a flat list of integers
-            seq_flat = [int(s) for s in seq]  # Force all to int
-            seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)  # (N,)
+            # Ensure seq is a flat list of integers - add debug
+            if len(seq) > 0 and not isinstance(seq[0], (int, float)):
+                print(f"Error: seq contains non-scalar values! First item type: {type(seq[0])}, value: {seq[0]}")
             
-            # Debug: check shape before unsqueeze
+            seq_flat = [int(s) for s in seq]  # Force all to int
+            
+            # Create tensor explicitly as 1D
+            try:
+                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)  # Should be (N,)
+            except Exception as e:
+                print(f"Error creating tensor from seq_flat: {e}")
+                print(f"  seq_flat type: {type(seq_flat)}, length: {len(seq_flat)}")
+                print(f"  First few items: {seq_flat[:5]}")
+                raise
+            
+            # Debug: check shape immediately after creation
             if seq_tensor.dim() != 1:
-                print(f"Error: seq_tensor has {seq_tensor.dim()} dimensions, expected 1. Shape: {seq_tensor.shape}")
-                # Flatten if needed
+                print(f"Error: seq_tensor has {seq_tensor.dim()} dimensions after creation! Shape: {seq_tensor.shape}")
+                print(f"  seq_flat was: {seq_flat[:10]}...")
+                # Force flatten
                 seq_tensor = seq_tensor.flatten()
             
             if seq_tensor.shape[0] != N:
                 print(f"Error: Sequence tensor has shape {seq_tensor.shape}, expected ({N},)")
+                print(f"  len(seq)={len(seq)}, N={N}")
                 # Truncate or pad to correct size
                 if seq_tensor.shape[0] > N:
                     seq_tensor = seq_tensor[:N]
@@ -422,9 +435,11 @@ class PointerTransformer(nn.Module):
             
             seq_tensor = seq_tensor.unsqueeze(0)  # (1, N)
             
-            # Final check
+            # Final check before return
             if seq_tensor.shape != (1, N):
                 print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
+                print(f"  Forcing reshape to (1, {N})")
+                seq_tensor = seq_tensor.view(1, N)
         else:
             seq_tensor = torch.stack(seq, dim=1)  # (B,N)
 
