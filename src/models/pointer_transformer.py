@@ -336,19 +336,21 @@ class PointerTransformer(nn.Module):
         # Return average loss only over valid steps
         if valid_steps == 0:
             # If all steps were invalid, return a large loss to signal the problem
-            print(f"Error: No valid steps in forward_teacher_forced (N={N})")
+            print(f"Error: No valid steps in forward_teacher_forced (N={N}, B={B})")
             # Add more debugging
             print(f"  First decode_step logits check:")
             test_logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
             print(f"    Logits shape: {test_logits.shape}")
-            print(f"    Has NaN: {torch.isnan(test_logits).any()}")
-            print(f"    Has +Inf: {(test_logits == float('inf')).any()}")
-            print(f"    Min: {test_logits.min().item()}, Max: {test_logits.max().item()}")
+            print(f"    Has NaN: {torch.isnan(test_logits).any().item()}")
+            print(f"    Has +Inf: {(test_logits == float('inf')).any().item()}")
+            print(f"    Min: {test_logits.min().item():.4f}, Max: {test_logits.max().item():.4f}")
+            print(f"    Sample logits (first 5): {test_logits[0, :5].tolist()}")
             return torch.tensor(1e6, device=device, requires_grad=True)
         
         return loss / valid_steps
 
     @torch.no_grad()
+
     def greedy_decode(self, x, edge_feats=None):
 
         B,N,_ = x.shape
@@ -371,7 +373,11 @@ class PointerTransformer(nn.Module):
             
             # Convert to scalar for batch size 1, keep tensor for batch > 1
             if B == 1:
-                choice_val = choice.item() if choice.numel() == 1 else choice[0].item()
+                # Explicitly convert to Python int
+                if choice.numel() == 1:
+                    choice_val = int(choice.item())
+                else:
+                    choice_val = int(choice[0].item())
                 seq.append(choice_val)
                 choice_tensor = choice  # Keep tensor for indexing
             else:
@@ -395,7 +401,16 @@ class PointerTransformer(nn.Module):
             print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
         
         if B == 1:
-            seq_tensor = torch.tensor(seq, dtype=torch.long, device=device)  # (N,)
+            # Ensure seq is a flat list of integers
+            seq_flat = [int(s) for s in seq]  # Force all to int
+            seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)  # (N,)
+            
+            # Debug: check shape before unsqueeze
+            if seq_tensor.dim() != 1:
+                print(f"Error: seq_tensor has {seq_tensor.dim()} dimensions, expected 1. Shape: {seq_tensor.shape}")
+                # Flatten if needed
+                seq_tensor = seq_tensor.flatten()
+            
             if seq_tensor.shape[0] != N:
                 print(f"Error: Sequence tensor has shape {seq_tensor.shape}, expected ({N},)")
                 # Truncate or pad to correct size
@@ -404,7 +419,12 @@ class PointerTransformer(nn.Module):
                 else:
                     padding = torch.zeros(N - seq_tensor.shape[0], dtype=torch.long, device=device)
                     seq_tensor = torch.cat([seq_tensor, padding])
+            
             seq_tensor = seq_tensor.unsqueeze(0)  # (1, N)
+            
+            # Final check
+            if seq_tensor.shape != (1, N):
+                print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
         else:
             seq_tensor = torch.stack(seq, dim=1)  # (B,N)
 
