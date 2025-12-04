@@ -1,7 +1,6 @@
 # src/train_pointer.py
 
 import argparse, math, random, json
-import os
 import yaml
 from pathlib import Path
 from datetime import datetime
@@ -195,7 +194,7 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4, help="Learning rate (full rate, not scaled)")
     ap.add_argument("--weight_decay", type=float, default=1e-3)
     ap.add_argument("--batch_size", type=int, default=32, help="Effective batch size via gradient accumulation")
-    ap.add_argument("--num_workers", type=int, default=os.cpu_count(), help="Number of data loader workers (default: CPU count)")
+    ap.add_argument("--num_workers", type=int, default=2, help="Number of data loader workers (reduced for memory)")
     
     # Model args
     ap.add_argument("--use_gnn", action="store_true")
@@ -344,31 +343,18 @@ def main():
     model.train()
     best_val_tau = -1.0
     
-    # Create DataLoader once - don't recreate each epoch to save memory
-    # Use a sampler that shuffles each epoch instead
-    from torch.utils.data import RandomSampler
-    train_sampler = RandomSampler(train_dataset, replacement=False)
-    
+    # Create DataLoader once - reuse across epochs for efficiency
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=1,
-        sampler=train_sampler,  # Use sampler instead of shuffle=True
-        num_workers=args.num_workers,  # Use all available CPUs
+        shuffle=True,  # Automatically shuffles each epoch
+        num_workers=args.num_workers,
         pin_memory=True if args.device == "cuda" else False,
-        persistent_workers=False,  # Don't persist to save memory
+        persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between epochs
     )
     
     for epoch in range(1, args.epochs + 1):
-        # Create new sampler each epoch for shuffling (lighter than new DataLoader)
-        train_sampler = RandomSampler(train_dataset, replacement=False)
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size=1,
-            sampler=train_sampler,
-            num_workers=args.num_workers,  # Use all available CPUs
-            pin_memory=True if args.device == "cuda" else False,
-            persistent_workers=False,
-        )
+        # No need to recreate DataLoader - it shuffles automatically with shuffle=True
         
         total_loss = 0.0
         accumulated_loss = 0.0
@@ -471,7 +457,7 @@ def main():
             opt.zero_grad()
             total_loss += accumulated_loss
         
-        # Clean up DataLoader and free memory
+        # Clean up DataLoader after all epochs
         del train_dataloader
         if args.device == "cuda":
             torch.cuda.empty_cache()
