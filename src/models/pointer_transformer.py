@@ -342,7 +342,29 @@ class PointerTransformer(nn.Module):
                 print(f"    mask_visited sum: {mask_visited.sum().item()}, unvisited: {(~mask_visited).sum().item()}")
                 print(f"    target y: {y.item()}, is_visited: {mask_visited[0, y.item()].item()}")
             
-            step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()  # Use log_probs_safe here!
+            step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()
+            
+            # Debug: check step_loss value
+            if t < 3 and B == 1:
+                print(f"    step_loss: {step_loss.item():.4f}")
+                # Check if any component is inf
+                component = -(y_one_hot * log_probs_safe).sum(dim=-1)
+                print(f"    loss component before mean: min={component.min().item():.4f}, max={component.max().item():.4f}")
+                print(f"    component has inf: {torch.isinf(component).any().item()}")
+            
+            # Check if step_loss is invalid
+            if torch.isnan(step_loss) or torch.isinf(step_loss):
+                print(f"Warning: Invalid step_loss at step {t}: {step_loss.item()}")
+                print(f"  logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
+                print(f"  log_probs stats: min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
+                print(f"  log_probs_safe stats: min={log_probs_safe.min().item():.4f}, max={log_probs_safe.max().item():.4f}")
+                print(f"  y_one_hot stats: min={y_one_hot.min().item():.4f}, max={y_one_hot.max().item():.4f}, sum={y_one_hot.sum().item():.4f}")
+                # Check the product
+                product = y_one_hot * log_probs_safe
+                print(f"  product stats: min={product.min().item():.4f}, max={product.max().item():.4f}, has_inf={torch.isinf(product).any().item()}")
+                # Skip this step
+                continue
+            
             loss += step_loss
             valid_steps += 1
 
