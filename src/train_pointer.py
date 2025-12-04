@@ -467,8 +467,6 @@ def main():
                 total_loss += accumulated_loss
                 accumulated_loss = 0.0
                 
-                if (step_count // args.batch_size) % 50 == 0:
-                    print(f"Epoch {epoch}/{args.epochs}, Step {step_count // args.batch_size}, Avg Loss: {total_loss/(step_count):.4f}")
         
         # Handle remaining accumulated gradients
         if step_count % args.batch_size != 0:
