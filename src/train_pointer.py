@@ -172,7 +172,11 @@ class RouteZoneDataset(Dataset):
             route_zones = build_zones(r, max_zone=max_zone)
             for z in route_zones:
                 if len(z) >= min_stops:
-                    self.zones.append(z)
+                    coords_tensor = torch.tensor(z[['lat','lon']].to_numpy(), dtype=torch.float32)
+                    adj = None
+                    if args.use_gnn:
+                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[0]-1))
+                    self.zones.append({'zone': z, 'adj': adj})
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -180,7 +184,10 @@ class RouteZoneDataset(Dataset):
         return len(self.zones)
     
     def __getitem__(self, idx):
-        return collate_zone(self.zones[idx])
+        z_dict = self.zones[idx]
+        coords, target_idx = collate_zone(z_dict['zone'])
+        adj = z_dict.get('adj')
+        return coords, target_idx, adj
 
 def main():
     ap = argparse.ArgumentParser(description="Train Pointer Transformer for TSP - Optimized for Full Compute")
@@ -353,21 +360,40 @@ def main():
         persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between epochs
     )
     
+    train_sampler = RandomSampler(train_dataset, replacement=False)
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        sampler=train_sampler,
+        num_workers=min(4, args.num_workers),
+        pin_memory=True if args.device == "cuda" else False,
+        persistent_workers=False,
+    )
+
     for epoch in range(1, args.epochs + 1):
-        # No need to recreate DataLoader - it shuffles automatically with shuffle=True
-        
+        # Only reshuffle the sampler each epoch
+        train_sampler.set_epoch(epoch)
+
         total_loss = 0.0
         accumulated_loss = 0.0
         count = 0
         step_count = 0
         
-        for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+        for batch_idx, (coords, target_idx, adj) in enumerate(
+        tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")
+    ):
             if batch_idx == 0:
                 print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
-            
+
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
-            
+
+            # Features
+            X = node_features(coords)
+
+            # GNN forward if used
+            if args.use_gnn and adj is not None:
+                X = gnn(X, adj.to(args.device))
             # Squeeze extra batch dimension if DataLoader added one
             # collate_zone already adds batch dim, so DataLoader creates (1, 1, N, 2) -> (1, N, 2)
             while coords.dim() > 3:
@@ -474,7 +500,7 @@ def main():
             val_metrics = []
             
             # Sample validation zones
-            val_zones_sample = random.sample(val_dataset.zones, min(args.val_num_zones, len(val_dataset.zones)))
+            val_zones_sample = random.sample(val_dataset.zones, 100)
             
             model.eval()
             if gnn:
