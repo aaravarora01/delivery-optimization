@@ -375,6 +375,9 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+            if batch_idx == 0:
+                print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
+            
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
@@ -413,6 +416,8 @@ def main():
             
             # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
+                if batch_idx < 5:  # Only print first few for debugging
+                    print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 del loss
                 continue
             

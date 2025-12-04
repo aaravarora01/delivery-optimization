@@ -123,7 +123,17 @@ def evaluate_zone_predictions(
     # Decode
     with torch.no_grad():
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
-        pred_order_indices = pred_order_indices.reshape(-1).tolist()
+        pred_order_indices = pred_order_indices.reshape(-1).cpu().numpy().tolist()
+    
+    # Validate indices are in range
+    num_stops = len(zone_df)
+    if len(pred_order_indices) != num_stops:
+        raise ValueError(f"Predicted sequence length ({len(pred_order_indices)}) doesn't match zone size ({num_stops})")
+    
+    # Check all indices are valid
+    invalid_indices = [i for i in pred_order_indices if i < 0 or i >= num_stops]
+    if invalid_indices:
+        raise ValueError(f"Invalid indices in prediction: {invalid_indices[:5]}... (zone size: {num_stops})")
     
     # Get stop_ids in predicted and true order
     stop_ids = zone_df['stop_id'].tolist()

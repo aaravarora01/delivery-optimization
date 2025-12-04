@@ -42,7 +42,7 @@ python src/train_pointer.py \
   --json_root cs230_data \
   --split train \
   --use_gnn \
-  --epochs 10 \
+  --epochs 12 \
   --batch_size 32 \
   --d_model 256 \
   --mixed_precision \
