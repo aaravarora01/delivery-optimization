@@ -323,4 +323,3 @@ class PointerTransformer(nn.Module):
         
         print(f"DEBUG greedy_decode returning: shape={seq_tensor.shape}")  # Add this line
         return seq_tensor
-

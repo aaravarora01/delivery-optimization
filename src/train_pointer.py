@@ -159,12 +159,11 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     print("Generated visualization plots")
 
 class RouteZoneDataset(Dataset):
-    def __init__(self, df, routes, max_zone=80, min_stops=3, use_gnn=False):
+    def __init__(self, df, routes, max_zone=80, min_stops=3):
         self.df = df
         self.routes = routes
         self.max_zone = max_zone
         self.min_stops = min_stops
-        self.use_gnn = use_gnn
         self.zones = []
         
         print(f"Building zones from {len(routes)} routes (max_zone={max_zone})...")
@@ -173,13 +172,7 @@ class RouteZoneDataset(Dataset):
             route_zones = build_zones(r, max_zone=max_zone)
             for z in route_zones:
                 if len(z) >= min_stops:
-                    coords_tensor = torch.tensor(z[['lat','lon']].to_numpy(), dtype=torch.float32)
-                    adj = None
-                    if self.use_gnn:  # Use self.use_gnn instead of args.use_gnn
-                        # Add batch dimension: (N, 2) -> (1, N, 2)
-                        coords_tensor = coords_tensor.unsqueeze(0)
-                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[1]-1))  # Use shape[1] for N after unsqueeze
-                    self.zones.append({'zone': z, 'adj': adj})
+                    self.zones.append(z)
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -268,8 +261,8 @@ def main():
     print(f"Split: {len(train_routes)} training routes, {len(val_routes)} validation routes")
     
     # Create datasets
-    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn)
-    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn)
+    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3)
+    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3)
     
     print(f"Training zones: {len(train_dataset.zones)}, Validation zones: {len(val_dataset.zones)}")
     
@@ -350,31 +343,18 @@ def main():
     model.train()
     best_val_tau = -1.0
     
-    # Create DataLoader once - don't recreate each epoch to save memory
-    # Use a sampler that shuffles each epoch instead
-    from torch.utils.data import RandomSampler
-    train_sampler = RandomSampler(train_dataset, replacement=False)
-    
+    # Create DataLoader once - reuse across epochs for efficiency
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=1,
-        sampler=train_sampler,  # Use sampler instead of shuffle=True
-        num_workers=min(4, args.num_workers),  # Reduce workers to save memory
+        shuffle=True,  # Automatically shuffles each epoch
+        num_workers=args.num_workers,
         pin_memory=True if args.device == "cuda" else False,
-        persistent_workers=False,  # Don't persist to save memory
+        persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between epochs
     )
     
     for epoch in range(1, args.epochs + 1):
-        # Create new sampler each epoch for shuffling (lighter than new DataLoader)
-        train_sampler = RandomSampler(train_dataset, replacement=False)
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size=1,
-            sampler=train_sampler,
-            num_workers=min(4, args.num_workers),
-            pin_memory=True if args.device == "cuda" else False,
-            persistent_workers=False,
-        )
+        # No need to recreate DataLoader - it shuffles automatically with shuffle=True
         
         total_loss = 0.0
         accumulated_loss = 0.0
@@ -477,7 +457,7 @@ def main():
             opt.zero_grad()
             total_loss += accumulated_loss
         
-        # Clean up DataLoader and free memory
+        # Clean up DataLoader after all epochs
         del train_dataloader
         if args.device == "cuda":
             torch.cuda.empty_cache()
