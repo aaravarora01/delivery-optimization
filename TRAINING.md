@@ -35,17 +35,6 @@ python src/train_pointer.py \
   --num_workers 8
 ```
 
-### Using Config File
-
-```bash
-python src/train_pointer.py \
-  --json_root cs230_data \
-  --split train \
-  --config configs/pointer_large.yaml \
-  --mixed_precision \
-  --compile
-```
-
 ### With GNN (Graph Neural Network)
 
 ```bash
@@ -53,10 +42,11 @@ python src/train_pointer.py \
   --json_root cs230_data \
   --split train \
   --use_gnn \
-  --epochs 20 \
+  --epochs 10 \
   --batch_size 32 \
   --d_model 256 \
-  --mixed_precision
+  --mixed_precision \
+  --save_plots
 ```
 
 ## Key Optimizations Made
