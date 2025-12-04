@@ -265,12 +265,9 @@ class PointerTransformer(nn.Module):
             has_pos_inf = (logits == float('inf')).any()  # Only positive infinity is invalid
             if has_nan or has_pos_inf:
                 consecutive_invalid += 1
-                if t < 3:  # Only print first few for debugging
-                    print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
-                    print(f"  Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
-                          f"nan_count={torch.isnan(logits).sum().item()}, pos_inf_count={(logits == float('inf')).sum().item()}")
-                    print(f"  H stats: min={H.min().item():.4f}, max={H.max().item():.4f}")
-                    print(f"  tgt stats: min={tgt.min().item():.4f}, max={tgt.max().item():.4f}")
+                print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
+                print(f"  Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
+                      f"nan_count={torch.isnan(logits).sum().item()}, pos_inf_count={(logits == float('inf')).sum().item()}")
                 
                 # If too many consecutive invalid steps, break to avoid infinite loop
                 if consecutive_invalid >= max_consecutive_invalid:
@@ -339,7 +336,14 @@ class PointerTransformer(nn.Module):
         # Return average loss only over valid steps
         if valid_steps == 0:
             # If all steps were invalid, return a large loss to signal the problem
-            print(f"Error: No valid steps in forward_teacher_forced")
+            print(f"Error: No valid steps in forward_teacher_forced (N={N})")
+            # Add more debugging
+            print(f"  First decode_step logits check:")
+            test_logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
+            print(f"    Logits shape: {test_logits.shape}")
+            print(f"    Has NaN: {torch.isnan(test_logits).any()}")
+            print(f"    Has +Inf: {(test_logits == float('inf')).any()}")
+            print(f"    Min: {test_logits.min().item()}, Max: {test_logits.max().item()}")
             return torch.tensor(1e6, device=device, requires_grad=True)
         
         return loss / valid_steps
@@ -365,16 +369,20 @@ class PointerTransformer(nn.Module):
 
             choice = torch.argmax(logits, dim=1)  # (B,)
             
-            # Ensure choice is a scalar for batch size 1
+            # Convert to scalar for batch size 1, keep tensor for batch > 1
             if B == 1:
-                choice = choice.item() if choice.numel() == 1 else choice[0].item()
-                seq.append(choice)
+                choice_val = choice.item() if choice.numel() == 1 else choice[0].item()
+                seq.append(choice_val)
+                choice_tensor = choice  # Keep tensor for indexing
             else:
                 seq.append(choice)
+                choice_tensor = choice
 
-            mask_visited = mask_visited.scatter(1, choice.unsqueeze(1) if isinstance(choice, torch.Tensor) else torch.tensor([[choice]], device=device), True)
+            # Update mask - use tensor version for scatter
+            mask_visited = mask_visited.scatter(1, choice_tensor.unsqueeze(1), True)
 
-            next_embed = H[torch.arange(B, device=device), choice if isinstance(choice, torch.Tensor) else torch.tensor([choice], device=device)]
+            # Get next embedding - use tensor version for indexing
+            next_embed = H[torch.arange(B, device=device), choice_tensor]  # (B,D)
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
             
@@ -382,11 +390,23 @@ class PointerTransformer(nn.Module):
             if mask_visited.all():
                 break
 
-        # Convert to tensor properly
+        # Convert to tensor properly - ensure we have exactly N items
+        if len(seq) != N:
+            print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
+        
         if B == 1:
-            seq = torch.tensor(seq, dtype=torch.long, device=device).unsqueeze(0)  # (1, N)
+            seq_tensor = torch.tensor(seq, dtype=torch.long, device=device)  # (N,)
+            if seq_tensor.shape[0] != N:
+                print(f"Error: Sequence tensor has shape {seq_tensor.shape}, expected ({N},)")
+                # Truncate or pad to correct size
+                if seq_tensor.shape[0] > N:
+                    seq_tensor = seq_tensor[:N]
+                else:
+                    padding = torch.zeros(N - seq_tensor.shape[0], dtype=torch.long, device=device)
+                    seq_tensor = torch.cat([seq_tensor, padding])
+            seq_tensor = seq_tensor.unsqueeze(0)  # (1, N)
         else:
-            seq = torch.stack(seq, dim=1)  # (B,N)
+            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
 
-        return seq
+        return seq_tensor
 
