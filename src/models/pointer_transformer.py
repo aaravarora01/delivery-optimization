@@ -321,5 +321,4 @@ class PointerTransformer(nn.Module):
             # Handle batch size > 1
             seq_tensor = torch.stack(seq, dim=1)  # (B,N)
         
-        print(f"DEBUG greedy_decode returning: shape={seq_tensor.shape}")  # Add this line
         return seq_tensor
