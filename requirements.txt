@@ -2,8 +2,10 @@ pandas
 numpy
 scikit-learn
 networkx
-torch
 pyyaml
 matplotlib
-
-
+# PyTorch + CUDA 12.1
+-f https://download.pytorch.org/whl/cu121/torch_stable.html
+torch
+torchvision
+torchaudio
