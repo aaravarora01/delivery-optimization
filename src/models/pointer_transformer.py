@@ -228,7 +228,6 @@ class PointerTransformer(nn.Module):
         """
 
         B,N,_ = x.shape
-        print(f"DEBUG forward_teacher_forced: B={B}, N={N}, x.shape={x.shape}, target_idx.shape={target_idx.shape}")  # Add this
 
         device = x.device
 
@@ -316,7 +315,24 @@ class PointerTransformer(nn.Module):
             
             # Compute cross-entropy loss with smoothed one-hot targets
             log_probs = F.log_softmax(logits, dim=-1)
-            loss += -(y_one_hot * log_probs).sum(dim=-1).mean()
+            
+            # Debug first few steps
+            if t < 3 and B == 1:
+                print(f"  Step {t}: logits min={logits.min().item():.4f}, max={logits.max().item():.4f}")
+                print(f"    log_probs min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
+                print(f"    y_one_hot sum={y_one_hot.sum().item():.4f}")
+            
+            step_loss = -(y_one_hot * log_probs).sum(dim=-1).mean()
+            
+            # Check if step_loss is invalid
+            if torch.isnan(step_loss) or torch.isinf(step_loss):
+                print(f"Warning: Invalid step_loss at step {t}: {step_loss.item()}")
+                print(f"  logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
+                print(f"  log_probs stats: min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
+                # Skip this step
+                continue
+            
+            loss += step_loss
             valid_steps += 1
 
             # append teacher token embedding: take the chosen node embedding as next query
@@ -348,7 +364,15 @@ class PointerTransformer(nn.Module):
             print(f"    Sample logits (first 5): {test_logits[0, :5].tolist()}")
             return torch.tensor(1e6, device=device, requires_grad=True)
         
-        return loss / valid_steps
+        final_loss = loss / valid_steps
+        
+        # Check final loss before returning
+        if torch.isnan(final_loss) or torch.isinf(final_loss):
+            print(f"Error: Final loss is invalid: {final_loss.item()}")
+            print(f"  loss={loss.item()}, valid_steps={valid_steps}")
+            return torch.tensor(1e6, device=device, requires_grad=True)
+        
+        return final_loss
 
     @torch.no_grad()
 
