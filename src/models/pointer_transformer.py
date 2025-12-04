@@ -338,10 +338,11 @@ class PointerTransformer(nn.Module):
             if t < 3 and B == 1:
                 print(f"  Step {t}: logits min={logits.min().item():.4f}, max={logits.max().item():.4f}")
                 print(f"    log_probs min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
+                print(f"    log_probs_safe min={log_probs_safe.min().item():.4f}, max={log_probs_safe.max().item():.4f}")
                 print(f"    mask_visited sum: {mask_visited.sum().item()}, unvisited: {(~mask_visited).sum().item()}")
                 print(f"    target y: {y.item()}, is_visited: {mask_visited[0, y.item()].item()}")
             
-            step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()
+            step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()  # Use log_probs_safe here!
             loss += step_loss
             valid_steps += 1
 
