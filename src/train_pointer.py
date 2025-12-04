@@ -208,6 +208,7 @@ def main():
     # Data args
     ap.add_argument("--max_zone", type=int, default=60, help="Maximum zone size (reduced for memory)")
     ap.add_argument("--max_routes", type=int, default=None, help="Limit number of routes (None = use all training data)")
+    ap.add_argument("--max_batches_per_epoch", type=int, default=None, help="Limit number of batches per epoch (None = use all)")
     ap.add_argument("--val_split", type=float, default=0.1, help="Fraction of routes to use for validation")
     ap.add_argument("--val_eval_freq", type=int, default=1, help="Evaluate validation every N epochs")
     ap.add_argument("--val_num_zones", type=int, default=50, help="Number of zones to evaluate during validation")
@@ -343,18 +344,31 @@ def main():
     model.train()
     best_val_tau = -1.0
     
-    # Create DataLoader once - reuse across epochs for efficiency
+    # Create DataLoader once - don't recreate each epoch to save memory
+    # Use a sampler that shuffles each epoch instead
+    from torch.utils.data import RandomSampler
+    train_sampler = RandomSampler(train_dataset, replacement=False)
+    
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=1,
-        shuffle=True,  # Automatically shuffles each epoch
-        num_workers=args.num_workers,
+        sampler=train_sampler,  # Use sampler instead of shuffle=True
+        num_workers=min(4, args.num_workers),  # Reduce workers to save memory
         pin_memory=True if args.device == "cuda" else False,
-        persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between epochs
+        persistent_workers=False,  # Don't persist to save memory
     )
     
     for epoch in range(1, args.epochs + 1):
-        # No need to recreate DataLoader - it shuffles automatically with shuffle=True
+        # Create new sampler each epoch for shuffling (lighter than new DataLoader)
+        train_sampler = RandomSampler(train_dataset, replacement=False)
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            sampler=train_sampler,
+            num_workers=min(4, args.num_workers),
+            pin_memory=True if args.device == "cuda" else False,
+            persistent_workers=False,
+        )
         
         total_loss = 0.0
         accumulated_loss = 0.0
@@ -362,6 +376,10 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+            # Limit batches per epoch if specified
+            if args.max_batches_per_epoch is not None and batch_idx >= args.max_batches_per_epoch:
+                break
+                
             if batch_idx == 0:
                 print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
@@ -457,7 +475,7 @@ def main():
             opt.zero_grad()
             total_loss += accumulated_loss
         
-        # Clean up DataLoader after all epochs
+        # Clean up DataLoader and free memory
         del train_dataloader
         if args.device == "cuda":
             torch.cuda.empty_cache()
