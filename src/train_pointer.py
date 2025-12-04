@@ -1,6 +1,7 @@
 # src/train_pointer.py
 
 import argparse, math, random, json
+import os
 import yaml
 from pathlib import Path
 from datetime import datetime
@@ -194,7 +195,7 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4, help="Learning rate (full rate, not scaled)")
     ap.add_argument("--weight_decay", type=float, default=1e-3)
     ap.add_argument("--batch_size", type=int, default=32, help="Effective batch size via gradient accumulation")
-    ap.add_argument("--num_workers", type=int, default=2, help="Number of data loader workers (reduced for memory)")
+    ap.add_argument("--num_workers", type=int, default=os.cpu_count(), help="Number of data loader workers (default: CPU count)")
     
     # Model args
     ap.add_argument("--use_gnn", action="store_true")
@@ -352,7 +353,7 @@ def main():
         train_dataset, 
         batch_size=1,
         sampler=train_sampler,  # Use sampler instead of shuffle=True
-        num_workers=min(4, args.num_workers),  # Reduce workers to save memory
+        num_workers=args.num_workers,  # Use all available CPUs
         pin_memory=True if args.device == "cuda" else False,
         persistent_workers=False,  # Don't persist to save memory
     )
@@ -364,7 +365,7 @@ def main():
             train_dataset,
             batch_size=1,
             sampler=train_sampler,
-            num_workers=min(4, args.num_workers),
+            num_workers=args.num_workers,  # Use all available CPUs
             pin_memory=True if args.device == "cuda" else False,
             persistent_workers=False,
         )
@@ -375,58 +376,55 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+            if batch_idx == 0:
+                print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
+            
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
+            # Squeeze extra batch dimension if DataLoader added one
+            # collate_zone already adds batch dim, so DataLoader creates (1, 1, N, 2) -> (1, N, 2)
             while coords.dim() > 3:
                 coords = coords.squeeze(0)
+            # Ensure coords is exactly 3D (B, N, 2)
             if coords.dim() < 3:
                 coords = coords.unsqueeze(0)
             
+            # Only squeeze target_idx if it has 3 dimensions (1, 1, N) -> (1, N)
+            # Don't squeeze if it's already (1, N) as we need the batch dimension
             while target_idx.dim() > 2:
                 target_idx = target_idx.squeeze(0)
+            # Ensure target_idx is exactly 2D (B, N)
             if target_idx.dim() < 2:
                 target_idx = target_idx.unsqueeze(0)
+            
+            if batch_idx == 0:
+                print(f"After squeezing: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
             # Features
             X = node_features(coords)
             
             if args.use_gnn:
-                coords_3d = coords
-                while coords_3d.dim() < 3:
-                    coords_3d = coords_3d.unsqueeze(0)
-                while coords_3d.dim() > 3:
-                    coords_3d = coords_3d.squeeze(0)
-                
-                adj = knn_adj(coords_3d, k=min(8, coords_3d.shape[1]-1))
-                
-                if adj.dim() == 2:
-                    adj = adj.unsqueeze(0)
-                
-                if X.dim() == 2:
-                    X = X.unsqueeze(0)
-                
+                adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
                 X = gnn(X, adj.to(args.device))
-                
-                if X.dim() == 2:
-                    X = X.unsqueeze(0)
-                elif X.dim() == 3 and X.shape[0] != coords.shape[0]:
-                    if X.shape[0] == X.shape[1]:
-                        X = X[0:1]
-                
-                del adj
+                del adj  # Free memory
             
             edge_feats = edge_bias_features(coords)
             
+            # Forward pass with mixed precision
             if args.mixed_precision and scaler:
                 with torch.cuda.amp.autocast():
                     loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             else:
                 loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
+            # Free intermediate tensors
             del X, edge_feats
             
+            # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
+                if batch_idx < 5:  # Only print first few for debugging
+                    print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 del loss
                 continue
             
