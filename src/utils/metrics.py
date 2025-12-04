@@ -111,14 +111,34 @@ def evaluate_zone_predictions(
         raise ValueError("Zone has fewer than 2 stops; cannot evaluate.")
     
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32, device=device).unsqueeze(0)
-    print(f"DEBUG: coords shape after unsqueeze: {coords.shape}, zone_df length: {len(zone_df)}")
     
     # Get features
     X = node_features(coords)
     print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
-        adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
+        # Ensure coords is 3D for knn_adj
+        coords_3d = coords
+        while coords_3d.dim() < 3:
+            coords_3d = coords_3d.unsqueeze(0)
+        while coords_3d.dim() > 3:
+            coords_3d = coords_3d.squeeze(0)
+            
+        adj = knn_adj(coords_3d, k=min(8, coords_3d.shape[1]-1))
+        
+        # Ensure adj has batch dimension
+        if adj.dim() == 2:
+            adj = adj.unsqueeze(0)  # (N, N) -> (1, N, N)
+        
+        # Ensure X has batch dimension for GNN
+        if X.dim() == 2:
+            X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
+        
         X = gnn(X, adj.to(device))
+        
+        # Ensure X is still 3D after GNN
+        if X.dim() == 2:
+            X = X.unsqueeze(0)
+            
         print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
@@ -126,10 +146,7 @@ def evaluate_zone_predictions(
     # Decode
     with torch.no_grad():
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
-        # Debug: check shape before reshape
-        print(f"DEBUG: pred_order_indices shape before reshape: {pred_order_indices.shape}, zone size: {len(zone_df)}")
         pred_order_indices = pred_order_indices.reshape(-1).cpu().numpy().tolist()
-        print(f"DEBUG: pred_order_indices length after reshape: {len(pred_order_indices)}")
     
     # Validate indices are in range
     num_stops = len(zone_df)

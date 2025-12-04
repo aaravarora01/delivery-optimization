@@ -383,16 +383,22 @@ def main():
             
             # Squeeze extra batch dimension if DataLoader added one
             # collate_zone already adds batch dim, so DataLoader creates (1, 1, N, 2) -> (1, N, 2)
-            if coords.dim() == 4:  # (1, 1, N, 2) -> (1, N, 2)
-                coords = coords.squeeze(0)
-            # Ensure coords is exactly 3D (B, N, 2) - squeeze any extra leading dimensions
             while coords.dim() > 3:
                 coords = coords.squeeze(0)
+            # Ensure coords is exactly 3D (B, N, 2)
+            if coords.dim() < 3:
+                coords = coords.unsqueeze(0)
             
             # Only squeeze target_idx if it has 3 dimensions (1, 1, N) -> (1, N)
             # Don't squeeze if it's already (1, N) as we need the batch dimension
-            if target_idx.dim() == 3:  # (1, 1, N) -> (1, N)
+            while target_idx.dim() > 2:
                 target_idx = target_idx.squeeze(0)
+            # Ensure target_idx is exactly 2D (B, N)
+            if target_idx.dim() < 2:
+                target_idx = target_idx.unsqueeze(0)
+            
+            if batch_idx == 0:
+                print(f"After squeezing: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
             # Features
             X = node_features(coords)
