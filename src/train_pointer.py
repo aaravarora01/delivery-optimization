@@ -176,7 +176,9 @@ class RouteZoneDataset(Dataset):
                     coords_tensor = torch.tensor(z[['lat','lon']].to_numpy(), dtype=torch.float32)
                     adj = None
                     if self.use_gnn:  # Use self.use_gnn instead of args.use_gnn
-                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[0]-1))
+                        # Add batch dimension: (N, 2) -> (1, N, 2)
+                        coords_tensor = coords_tensor.unsqueeze(0)
+                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[1]-1))  # Use shape[1] for N after unsqueeze
                     self.zones.append({'zone': z, 'adj': adj})
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
