@@ -7,12 +7,14 @@ from datetime import datetime
 
 import numpy as np, pandas as pd, torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from sklearn.cluster import KMeans
 from tqdm import tqdm
+
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -514,11 +516,73 @@ def main():
                         zone_df = zone_item['zone']
                     else:
                         zone_df = zone_item
-                    
+
+                    if debug_count < 2:
+                        try:
+                            # Prepare coords/target the same way collate_zone does
+                            coords_val, target_idx_val = collate_zone(zone_df)  # (1,N,2), (1,N)
+                            # Squeeze / ensure dims exactly like training pipeline
+                            while coords_val.dim() > 3:
+                                coords_val = coords_val.squeeze(0)
+                            if coords_val.dim() < 3:
+                                coords_val = coords_val.unsqueeze(0)
+                            while target_idx_val.dim() > 2:
+                                target_idx_val = target_idx_val.squeeze(0)
+                            if target_idx_val.dim() < 2:
+                                target_idx_val = target_idx_val.unsqueeze(0)
+
+                            coords_val = coords_val.to(args.device)
+                            target_idx_val = target_idx_val.to(args.device)
+
+                            # Compute node features (and GNN if used)
+                            X_val = node_features(coords_val)
+                            if args.use_gnn and gnn is not None:
+                                adj_val = knn_adj(coords_val, k=max(1, min(8, coords_val.shape[1]-1)))
+                                X_val = gnn(X_val, adj_val.to(args.device))
+                                del adj_val
+                            edge_feats_val = edge_bias_features(coords_val)
+
+                            # Get encoder outputs and first-step logits
+                            model.eval()
+                            with torch.no_grad():
+                                H_val = model.encode(X_val)                  # (1,N,D)
+                                tgt0 = model.query_start.expand(1, 1, -1).to(args.device)  # (1,1,D)
+                                mask0 = torch.zeros(1, X_val.size(1), dtype=torch.bool, device=args.device)
+
+                                logits0 = model.decode_step(H_val, tgt0, mask0, edge_feats=edge_feats_val if edge_feats_val is not None else None)  # (1,N)
+                                probs0 = F.softmax(logits0, dim=-1)
+                                pred0 = torch.argmax(probs0, dim=-1)  # (1,)
+
+                            # Print compact debug info
+                            logits0_flat = logits0[0].cpu()
+                            probs0_flat = probs0[0].cpu()
+                            topk = 5
+                            topk_vals, topk_idx = torch.topk(logits0_flat, k=min(topk, logits0_flat.numel()))
+                            true_first = int(target_idx_val[0, 0].cpu().item())
+                            pred_first = int(pred0[0].cpu().item())
+
+                            print("\n--- VALIDATION DIAGNOSTIC ---")
+                            print("coords shape:", coords_val.shape)
+                            print("target_idx (first 10):", target_idx_val[0, :min(10, target_idx_val.size(1))].cpu().tolist())
+                            print(f"First-step logits (first 10): {logits0_flat[:10].tolist()}")
+                            print(f"First-step probs  (first 10): {probs0_flat[:10].tolist()}")
+                            print("Top-k logits indices:", topk_idx.tolist())
+                            print("Top-k logits values: ", topk_vals.tolist())
+                            print("Predicted first index:", pred_first, " True first index:", true_first)
+                            print("mask0 sum (visited):", mask0.sum().item())
+                            print("Is true_first masked in mask0?:", bool(mask0[0, true_first].item()))
+                            print("--- END DIAGNOSTIC ---\n")
+
+                            # restore train mode (we left model.eval())
+                            model.train()
+                        except Exception as e:
+                            print("Diagnostic failed with exception:", e)
+                        debug_count += 1
                     metrics = evaluate_zone_predictions(
                         model, gnn, zone_df, args.device, 
                         use_gnn=args.use_gnn, greedy=True
                     )
+
                     val_metrics.append(metrics)
                 except Exception as e:
                     print(f"Warning: Validation evaluation failed for zone: {e}")
