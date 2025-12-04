@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 ## Data
 
-Place the official data under `cs230_data/`, e.g.:
+Official data is stored under `cs230_data/`, e.g.:
 
 - `cs230_data/almrrc2021-data-training/model_build_inputs/{route_data.json, package_data.json, actual_sequences.json}`
 - `cs230_data/almrrc2021-data-evaluation/model_apply_inputs/{eval_route_data.json, eval_package_data.json, eval_travel_times.json}`
@@ -33,11 +33,5 @@ python src/run_learned.py \
 ```
 
 Outputs: `outputs/route_<RID>_learned.csv`
-
-## Tests
-
-```bash
-pytest -q
-```
 
 
