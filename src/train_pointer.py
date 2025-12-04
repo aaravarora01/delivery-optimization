@@ -375,36 +375,23 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
-            if batch_idx == 0:
-                print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
-            
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
-            # Squeeze extra batch dimension if DataLoader added one
-            # collate_zone already adds batch dim, so DataLoader creates (1, 1, N, 2) -> (1, N, 2)
             while coords.dim() > 3:
                 coords = coords.squeeze(0)
-            # Ensure coords is exactly 3D (B, N, 2)
             if coords.dim() < 3:
                 coords = coords.unsqueeze(0)
             
-            # Only squeeze target_idx if it has 3 dimensions (1, 1, N) -> (1, N)
-            # Don't squeeze if it's already (1, N) as we need the batch dimension
             while target_idx.dim() > 2:
                 target_idx = target_idx.squeeze(0)
-            # Ensure target_idx is exactly 2D (B, N)
             if target_idx.dim() < 2:
                 target_idx = target_idx.unsqueeze(0)
-            
-            if batch_idx == 0:
-                print(f"After squeezing: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
             # Features
             X = node_features(coords)
             
             if args.use_gnn:
-                # Ensure coords is 3D for knn_adj
                 coords_3d = coords
                 while coords_3d.dim() < 3:
                     coords_3d = coords_3d.unsqueeze(0)
@@ -413,43 +400,33 @@ def main():
                 
                 adj = knn_adj(coords_3d, k=min(8, coords_3d.shape[1]-1))
                 
-                # Ensure adj has batch dimension
                 if adj.dim() == 2:
-                    adj = adj.unsqueeze(0)  # (N, N) -> (1, N, N)
+                    adj = adj.unsqueeze(0)
                 
-                # Ensure X has batch dimension for GNN
                 if X.dim() == 2:
-                    X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
+                    X = X.unsqueeze(0)
                 
                 X = gnn(X, adj.to(args.device))
                 
-                # Ensure X is still 3D after GNN (GNN should preserve batch dim, but check)
                 if X.dim() == 2:
-                    X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
+                    X = X.unsqueeze(0)
                 elif X.dim() == 3 and X.shape[0] != coords.shape[0]:
-                    # If batch dimension changed, fix it
                     if X.shape[0] == X.shape[1]:
-                        # GNN output is (N, N, d) instead of (1, N, d) - take first batch
-                        X = X[0:1]  # (1, N, d)
+                        X = X[0:1]
                 
-                del adj  # Free memory
+                del adj
             
             edge_feats = edge_bias_features(coords)
             
-            # Forward pass with mixed precision
             if args.mixed_precision and scaler:
-                with torch.cuda.amp.autocast('cuda'):
+                with torch.cuda.amp.autocast():
                     loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             else:
                 loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
-            # Free intermediate tensors
             del X, edge_feats
             
-            # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
-                if batch_idx < 5:  # Only print first few for debugging
-                    print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 del loss
                 continue
             

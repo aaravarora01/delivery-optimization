@@ -131,11 +131,9 @@ class PointerTransformer(nn.Module):
 
         # Check inputs for NaN/Inf
         if torch.isnan(H).any() or torch.isinf(H).any():
-            print(f"Warning: Invalid H (encoder output) detected in decode_step")
             H = torch.nan_to_num(H, nan=0.0, posinf=1e6, neginf=-1e6)
         
         if torch.isnan(tgt).any() or torch.isinf(tgt).any():
-            print(f"Warning: Invalid tgt detected in decode_step")
             tgt = torch.nan_to_num(tgt, nan=0.0, posinf=1e6, neginf=-1e6)
 
         # standard transformer decoding
@@ -151,21 +149,18 @@ class PointerTransformer(nn.Module):
         
         # Check decoder output
         if torch.isnan(D).any() or torch.isinf(D).any():
-            print(f"Warning: Invalid decoder output D detected")
             D = torch.nan_to_num(D, nan=0.0, posinf=1e6, neginf=-1e6)
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
         
         # Check query
         if torch.isnan(q).any() or torch.isinf(q).any():
-            print(f"Warning: Invalid query q detected")
             q = torch.nan_to_num(q, nan=0.0, posinf=1e6, neginf=-1e6)
 
         keys = self.ptr_proj(H)      # (B,N,D)
         
         # Check keys
         if torch.isnan(keys).any() or torch.isinf(keys).any():
-            print(f"Warning: Invalid keys detected")
             keys = torch.nan_to_num(keys, nan=0.0, posinf=1e6, neginf=-1e6)
 
         logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # pointer scores
@@ -174,13 +169,11 @@ class PointerTransformer(nn.Module):
         has_nan = torch.isnan(logits).any()
         has_pos_inf = (logits == float('inf')).any()
         if has_nan or has_pos_inf:
-            print(f"Warning: Invalid logits after einsum (NaN: {has_nan}, +Inf: {has_pos_inf})")
             logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)  # Keep -inf for masking
 
         if self.edge_bias is not None and edge_feats is not None:
             # Check edge features
             if torch.isnan(edge_feats).any() or torch.isinf(edge_feats).any():
-                print(f"Warning: Invalid edge_feats detected")
                 edge_feats = torch.nan_to_num(edge_feats, nan=0.0, posinf=1e6, neginf=-1e6)
 
             # Use last chosen index to index edge_feats for bias against candidates
@@ -191,7 +184,6 @@ class PointerTransformer(nn.Module):
             
             # Check bias
             if torch.isnan(bias).any() or torch.isinf(bias).any():
-                print(f"Warning: Invalid bias from edge_bias detected")
                 bias = torch.nan_to_num(bias, nan=0.0, posinf=1e6, neginf=-1e6)
 
             bias = bias.mean(dim=1)            # (B,N)
@@ -210,7 +202,6 @@ class PointerTransformer(nn.Module):
         has_nan = torch.isnan(logits).any()
         has_pos_inf = (logits == float('inf')).any()
         if has_nan or has_pos_inf:
-            print(f"Warning: Invalid logits after masking (NaN: {has_nan}, +Inf: {has_pos_inf})")
             logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
             # Re-apply masking after nan_to_num
             logits = logits.masked_fill(mask_visited, float("-inf"))
@@ -233,18 +224,15 @@ class PointerTransformer(nn.Module):
 
         # Check input features
         if torch.isnan(x).any() or torch.isinf(x).any():
-            print(f"Warning: Invalid input x detected")
             x = torch.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
 
         H = self.encode(x)
         
         # Check encoder output
         if torch.isnan(H).any() or torch.isinf(H).any():
-            print(f"Warning: Invalid encoder output H detected")
             H = torch.nan_to_num(H, nan=0.0, posinf=1e6, neginf=-1e6)
 
         # Start token
-
         tgt = self.query_start.expand(B,1,-1)
 
         loss = 0.0
@@ -253,23 +241,16 @@ class PointerTransformer(nn.Module):
 
         valid_steps = 0
         consecutive_invalid = 0
-        max_consecutive_invalid = 3  # Break if we get too many consecutive invalid steps
+        max_consecutive_invalid = 3
 
         for t in range(N):
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-            
-            # Debug: check mask_visited state
-            if t < 3 and B == 1:
-                print(f"  Step {t}: mask_visited has {mask_visited.sum().item()} visited nodes out of {N}")
-                print(f"    logits before any processing: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
 
             # Check for invalid logits BEFORE computing loss
-            # Only check for NaN and +inf, not -inf (which is used for masking)
             has_nan = torch.isnan(logits).any()
-            has_pos_inf = (logits == float('inf')).any()  # Only positive infinity is invalid
+            has_pos_inf = (logits == float('inf')).any()
             
-            # Check if ALL logits are -inf (all nodes visited - shouldn't happen)
             all_masked = (logits == float('-inf')).all()
             if all_masked:
                 print(f"Error: All nodes are masked at step {t}! mask_visited: {mask_visited.sum().item()}/{N}")
@@ -277,14 +258,8 @@ class PointerTransformer(nn.Module):
             
             if has_nan or has_pos_inf:
                 consecutive_invalid += 1
-                print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
-                print(f"  Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
-                      f"nan_count={torch.isnan(logits).sum().item()}, pos_inf_count={(logits == float('inf')).sum().item()}")
-                
-                # If too many consecutive invalid steps, break to avoid infinite loop
                 if consecutive_invalid >= max_consecutive_invalid:
-                    print(f"Error: Too many consecutive invalid steps. Breaking loop.")
-                    # Check model weights for corruption
+                    print(f"Error: Too many consecutive invalid steps at step {t}. Breaking loop.")
                     for name, param in self.named_parameters():
                         if torch.isnan(param).any() or (param == float('inf')).any():
                             print(f"  CORRUPTED PARAMETER: {name} has NaN/+Inf values!")
@@ -292,25 +267,19 @@ class PointerTransformer(nn.Module):
                 
                 # Replace invalid logits with uniform distribution (fallback)
                 logits = torch.zeros_like(logits)
-                # Use a random valid (unvisited) node as fallback
                 unvisited = ~mask_visited
                 if unvisited.any():
-                    # Set logits to uniform for unvisited nodes
                     logits = logits.masked_fill(mask_visited, float("-inf"))
                     logits = logits.masked_fill(unvisited, 0.0)
                 else:
-                    # All nodes visited - this shouldn't happen, but handle it
                     print(f"Error: All nodes visited at step {t}")
                     break
             else:
-                consecutive_invalid = 0  # Reset counter on valid step
+                consecutive_invalid = 0
 
-            y = target_idx[:, t]  # (B,)
+            y = target_idx[:, t]
             
-            # Ensure target is valid
             if (y >= N).any() or (y < 0).any():
-                print(f"Warning: Invalid target index at step {t}: {y}")
-                # Use first unvisited node as fallback
                 unvisited = ~mask_visited
                 if unvisited.any():
                     y = torch.where(unvisited.any(dim=1), 
@@ -325,84 +294,35 @@ class PointerTransformer(nn.Module):
             y_one_hot.scatter_(1, y.unsqueeze(1), 1.0)
             
             # Apply label smoothing ONLY to unvisited nodes
-            # Don't smooth masked (visited) positions to avoid huge loss values
-            unvisited_mask = ~mask_visited  # (B, N)
+            unvisited_mask = ~mask_visited
             smoothing_weight = 0.05
-            # Only apply smoothing to unvisited positions
             y_one_hot = y_one_hot * (1 - smoothing_weight) + (smoothing_weight / unvisited_mask.sum(dim=1, keepdim=True).float()) * unvisited_mask.float()
             
             # Compute cross-entropy loss with smoothed one-hot targets
-            # Clone logits and mask visited nodes with a large negative value
             logits = logits.clone()
             logits[mask_visited] = -1e9
-
-            # Compute log probabilities
             log_probs = F.log_softmax(logits, dim=-1)
-
-            # Use safe log_probs for loss computation
             log_probs_safe = log_probs
-            
-            # Debug first few steps
-            if t < 3 and B == 1:
-                print(f"  Step {t}: logits min={logits.min().item():.4f}, max={logits.max().item():.4f}")
-                print(f"    log_probs min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
-                print(f"    log_probs_safe min={log_probs_safe.min().item():.4f}, max={log_probs_safe.max().item():.4f}")
-                print(f"    mask_visited sum: {mask_visited.sum().item()}, unvisited: {(~mask_visited).sum().item()}")
-                print(f"    target y: {y.item()}, is_visited: {mask_visited[0, y.item()].item()}")
             
             step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()
             
-            # Debug: check step_loss value
-            if t < 3 and B == 1:
-                print(f"    step_loss: {step_loss.item():.4f}")
-                # Check if any component is inf
-                component = -(y_one_hot * log_probs_safe).sum(dim=-1)
-                print(f"    loss component before mean: min={component.min().item():.4f}, max={component.max().item():.4f}")
-                print(f"    component has inf: {torch.isinf(component).any().item()}")
-            
-            # Check if step_loss is invalid
             if torch.isnan(step_loss) or torch.isinf(step_loss):
-                print(f"Warning: Invalid step_loss at step {t}: {step_loss.item()}")
-                print(f"  logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
-                print(f"  log_probs stats: min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
-                print(f"  log_probs_safe stats: min={log_probs_safe.min().item():.4f}, max={log_probs_safe.max().item():.4f}")
-                print(f"  y_one_hot stats: min={y_one_hot.min().item():.4f}, max={y_one_hot.max().item():.4f}, sum={y_one_hot.sum().item():.4f}")
-                # Check the product
-                product = y_one_hot * log_probs_safe
-                print(f"  product stats: min={product.min().item():.4f}, max={product.max().item():.4f}, has_inf={torch.isinf(product).any().item()}")
-                # Skip this step
                 continue
             
             loss += step_loss
             valid_steps += 1
 
-            # append teacher token embedding: take the chosen node embedding as next query
-
-            chosen = y  # teacher forcing
-
+            chosen = y
             mask_visited = mask_visited.scatter(1, chosen.unsqueeze(1), True)
-
-            next_embed = H[torch.arange(B, device=device), chosen]  # (B,D)
+            next_embed = H[torch.arange(B, device=device), chosen]
             
-            # Check next_embed for NaN/Inf
             if torch.isnan(next_embed).any() or torch.isinf(next_embed).any():
-                print(f"Warning: Invalid next_embed at step {t}, using zero vector")
                 next_embed = torch.zeros_like(next_embed)
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
 
-        # Return average loss only over valid steps
         if valid_steps == 0:
-            # If all steps were invalid, return a large loss to signal the problem
             print(f"Error: No valid steps in forward_teacher_forced (N={N}, B={B})")
-            # Add more debugging
-            print(f"  First decode_step logits check:")
-            test_logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-            print(f"    Logits shape: {test_logits.shape}")
-            print(f"    Has NaN: {torch.isnan(test_logits).any().item()}")
-            print(f"    Has +Inf: {(test_logits == float('inf')).any().item()}")
-            print(f"    Min: {test_logits.min().item():.4f}, Max: {test_logits.max().item():.4f}")
-            print(f"    Sample logits (first 5): {test_logits[0, :5].tolist()}")
             return torch.tensor(1e6, device=device, requires_grad=True)
         
         return loss / valid_steps
@@ -431,11 +351,15 @@ class PointerTransformer(nn.Module):
             
             # Convert to scalar for batch size 1, keep tensor for batch > 1
             if B == 1:
-                seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
-                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1,N)
+                if choice.numel() == 1:
+                    choice_val = int(choice.item())
+                else:
+                    choice_val = int(choice[0].item())
+                seq.append(choice_val)
+                choice_tensor = choice
             else:
-                seq_tensor = torch.stack(seq, dim=1)  # (B,N)
-
+                seq.append(choice)
+                choice_tensor = choice
 
             # Update mask - use tensor version for scatter
             mask_visited = mask_visited.scatter(1, choice_tensor.unsqueeze(1), True)
@@ -451,54 +375,31 @@ class PointerTransformer(nn.Module):
 
         # Convert to tensor properly - ensure we have exactly N items
         if len(seq) != N:
-            print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
+            seq = seq[:N] if len(seq) > N else seq + [0] * (N - len(seq))
         
         if B == 1:
-            seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
-            seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1,N)
-        else:
-            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
-
-            
-            # Create tensor explicitly as 1D
+            seq_flat = [int(s) for s in seq]
             try:
-                seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
-                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1, N)
-
-            except Exception as e:
-                print(f"Error creating tensor from seq_flat: {e}")
-                print(f"  seq_flat type: {type(seq_flat)}, length: {len(seq_flat)}")
-                print(f"  First few items: {seq_flat[:5]}")
-                raise
+                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)
+            except Exception:
+                seq_tensor = torch.zeros(N, dtype=torch.long, device=device)
             
-            # Debug: check shape immediately after creation
             if seq_tensor.dim() != 1:
-                print(f"Error: seq_tensor has {seq_tensor.dim()} dimensions after creation! Shape: {seq_tensor.shape}")
-                print(f"  seq_flat was: {seq_flat[:10]}...")
-                # Force flatten
                 seq_tensor = seq_tensor.flatten()
             
             if seq_tensor.shape[0] != N:
-                print(f"Error: Sequence tensor has shape {seq_tensor.shape}, expected ({N},)")
-                print(f"  len(seq)={len(seq)}, N={N}")
-                # Truncate or pad to correct size
                 if seq_tensor.shape[0] > N:
                     seq_tensor = seq_tensor[:N]
                 else:
                     padding = torch.zeros(N - seq_tensor.shape[0], dtype=torch.long, device=device)
                     seq_tensor = torch.cat([seq_tensor, padding])
             
-            seq_tensor = seq_tensor.unsqueeze(0)  # (1, N)
+            seq_tensor = seq_tensor.unsqueeze(0)
             
-            # Final check before return
             if seq_tensor.shape != (1, N):
-                print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
-                print(f"  Forcing reshape to (1, {N})")
                 seq_tensor = seq_tensor.view(1, N)
-            else:
-                # Handle batch size > 1
-                seq_tensor = torch.stack(seq, dim=1)  # (B,N)
-        
-        print(f"DEBUG greedy_decode returning: shape={seq_tensor.shape}")  # Add this line
+        else:
+            seq_tensor = torch.stack(seq, dim=1)
+
         return seq_tensor
 
