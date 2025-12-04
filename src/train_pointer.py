@@ -507,8 +507,14 @@ def main():
             if gnn:
                 gnn.eval()
             
-            for zone_df in val_zones_sample:
+            for zone_item in val_zones_sample:
                 try:
+                    # Extract zone DataFrame from dict if needed
+                    if isinstance(zone_item, dict):
+                        zone_df = zone_item['zone']
+                    else:
+                        zone_df = zone_item
+                    
                     metrics = evaluate_zone_predictions(
                         model, gnn, zone_df, args.device, 
                         use_gnn=args.use_gnn, greedy=True
