@@ -159,11 +159,12 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     print("Generated visualization plots")
 
 class RouteZoneDataset(Dataset):
-    def __init__(self, df, routes, max_zone=80, min_stops=3):
+    def __init__(self, df, routes, max_zone=80, min_stops=3, use_gnn=False, max_zones=None):
         self.df = df
         self.routes = routes
         self.max_zone = max_zone
         self.min_stops = min_stops
+        self.use_gnn = use_gnn
         self.zones = []
         
         print(f"Building zones from {len(routes)} routes (max_zone={max_zone})...")
@@ -172,7 +173,19 @@ class RouteZoneDataset(Dataset):
             route_zones = build_zones(r, max_zone=max_zone)
             for z in route_zones:
                 if len(z) >= min_stops:
-                    self.zones.append(z)
+                    coords_tensor = torch.tensor(z[['lat','lon']].to_numpy(), dtype=torch.float32)
+                    adj = None
+                    if self.use_gnn:
+                        coords_tensor = coords_tensor.unsqueeze(0)
+                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[1]-1))
+                    self.zones.append({'zone': z, 'adj': adj})
+                    
+                    # Stop if we've reached the limit
+                    if max_zones is not None and len(self.zones) >= max_zones:
+                        break
+            # Break outer loop if limit reached
+            if max_zones is not None and len(self.zones) >= max_zones:
+                break
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -180,7 +193,7 @@ class RouteZoneDataset(Dataset):
         return len(self.zones)
     
     def __getitem__(self, idx):
-        return collate_zone(self.zones[idx])
+        return collate_zone(self.zones[idx]['zone'])
 
 def main():
     ap = argparse.ArgumentParser(description="Train Pointer Transformer for TSP - Optimized for Full Compute")
@@ -208,7 +221,7 @@ def main():
     # Data args
     ap.add_argument("--max_zone", type=int, default=60, help="Maximum zone size (reduced for memory)")
     ap.add_argument("--max_routes", type=int, default=None, help="Limit number of routes (None = use all training data)")
-    ap.add_argument("--max_batches_per_epoch", type=int, default=None, help="Limit number of batches per epoch (None = use all)")
+    ap.add_argument("--max_zones", type=int, default=None, help="Limit number of zones in training dataset (None = use all)")
     ap.add_argument("--val_split", type=float, default=0.1, help="Fraction of routes to use for validation")
     ap.add_argument("--val_eval_freq", type=int, default=1, help="Evaluate validation every N epochs")
     ap.add_argument("--val_num_zones", type=int, default=50, help="Number of zones to evaluate during validation")
@@ -262,8 +275,8 @@ def main():
     print(f"Split: {len(train_routes)} training routes, {len(val_routes)} validation routes")
     
     # Create datasets
-    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3)
-    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3)
+    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn, max_zones=args.max_zones)
+    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn)
     
     print(f"Training zones: {len(train_dataset.zones)}, Validation zones: {len(val_dataset.zones)}")
     
@@ -376,10 +389,6 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
-            # Limit batches per epoch if specified
-            if args.max_batches_per_epoch is not None and batch_idx >= args.max_batches_per_epoch:
-                break
-                
             if batch_idx == 0:
                 print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
