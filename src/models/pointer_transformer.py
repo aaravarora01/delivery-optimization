@@ -323,7 +323,13 @@ class PointerTransformer(nn.Module):
             num_classes = logits.size(-1)
             y_one_hot = torch.zeros(logits.size(0), num_classes, device=logits.device)
             y_one_hot.scatter_(1, y.unsqueeze(1), 1.0)
-            y_one_hot = y_one_hot * (1 - 0.05) + 0.05 / num_classes  # Apply label smoothing
+            
+            # Apply label smoothing ONLY to unvisited nodes
+            # Don't smooth masked (visited) positions to avoid huge loss values
+            unvisited_mask = ~mask_visited  # (B, N)
+            smoothing_weight = 0.05
+            # Only apply smoothing to unvisited positions
+            y_one_hot = y_one_hot * (1 - smoothing_weight) + (smoothing_weight / unvisited_mask.sum(dim=1, keepdim=True).float()) * unvisited_mask.float()
             
             # Compute cross-entropy loss with smoothed one-hot targets
             log_probs = F.log_softmax(logits, dim=-1)
