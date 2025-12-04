@@ -438,7 +438,7 @@ def main():
             
             # Forward pass with mixed precision
             if args.mixed_precision and scaler:
-                with torch.cuda.amp.autocast():
+                with torch.cuda.amp.autocast('cuda'):
                     loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             else:
                 loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)

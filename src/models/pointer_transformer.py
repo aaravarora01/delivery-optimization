@@ -332,13 +332,15 @@ class PointerTransformer(nn.Module):
             y_one_hot = y_one_hot * (1 - smoothing_weight) + (smoothing_weight / unvisited_mask.sum(dim=1, keepdim=True).float()) * unvisited_mask.float()
             
             # Compute cross-entropy loss with smoothed one-hot targets
+            # Clone logits and mask visited nodes with a large negative value
+            logits = logits.clone()
+            logits[mask_visited] = -1e9
+
+            # Compute log probabilities
             log_probs = F.log_softmax(logits, dim=-1)
-            
-            # Replace -inf in log_probs with a large negative value BEFORE computing loss
-            # This prevents inf when label smoothing assigns small weight to masked positions
-            log_probs_safe = torch.where(log_probs == float('-inf'), 
-                                        torch.tensor(-1e10, device=log_probs.device, dtype=log_probs.dtype),
-                                        log_probs)
+
+            # Use safe log_probs for loss computation
+            log_probs_safe = log_probs
             
             # Debug first few steps
             if t < 3 and B == 1:
