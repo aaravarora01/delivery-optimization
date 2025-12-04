@@ -135,10 +135,15 @@ def evaluate_zone_predictions(
         
         X = gnn(X, adj.to(device))
         
-        # Ensure X is still 3D after GNN
+        # Ensure X is still 3D after GNN (GNN should preserve batch dim, but check)
         if X.dim() == 2:
-            X = X.unsqueeze(0)
-            
+            X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
+        elif X.dim() == 3 and X.shape[0] != coords.shape[0]:
+            # If batch dimension changed, fix it
+            if X.shape[0] == X.shape[1]:
+                # GNN output is (N, N, d) instead of (1, N, d) - take first batch
+                X = X[0:1]  # (1, N, d)
+        
         print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
