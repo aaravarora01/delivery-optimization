@@ -258,11 +258,23 @@ class PointerTransformer(nn.Module):
         for t in range(N):
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
+            
+            # Debug: check mask_visited state
+            if t < 3 and B == 1:
+                print(f"  Step {t}: mask_visited has {mask_visited.sum().item()} visited nodes out of {N}")
+                print(f"    logits before any processing: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
 
             # Check for invalid logits BEFORE computing loss
             # Only check for NaN and +inf, not -inf (which is used for masking)
             has_nan = torch.isnan(logits).any()
             has_pos_inf = (logits == float('inf')).any()  # Only positive infinity is invalid
+            
+            # Check if ALL logits are -inf (all nodes visited - shouldn't happen)
+            all_masked = (logits == float('-inf')).all()
+            if all_masked:
+                print(f"Error: All nodes are masked at step {t}! mask_visited: {mask_visited.sum().item()}/{N}")
+                break
+            
             if has_nan or has_pos_inf:
                 consecutive_invalid += 1
                 print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
@@ -316,22 +328,20 @@ class PointerTransformer(nn.Module):
             # Compute cross-entropy loss with smoothed one-hot targets
             log_probs = F.log_softmax(logits, dim=-1)
             
+            # Replace -inf in log_probs with a large negative value BEFORE computing loss
+            # This prevents inf when label smoothing assigns small weight to masked positions
+            log_probs_safe = torch.where(log_probs == float('-inf'), 
+                                        torch.tensor(-1e10, device=log_probs.device, dtype=log_probs.dtype),
+                                        log_probs)
+            
             # Debug first few steps
             if t < 3 and B == 1:
                 print(f"  Step {t}: logits min={logits.min().item():.4f}, max={logits.max().item():.4f}")
                 print(f"    log_probs min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
-                print(f"    y_one_hot sum={y_one_hot.sum().item():.4f}")
+                print(f"    mask_visited sum: {mask_visited.sum().item()}, unvisited: {(~mask_visited).sum().item()}")
+                print(f"    target y: {y.item()}, is_visited: {mask_visited[0, y.item()].item()}")
             
-            step_loss = -(y_one_hot * log_probs).sum(dim=-1).mean()
-            
-            # Check if step_loss is invalid
-            if torch.isnan(step_loss) or torch.isinf(step_loss):
-                print(f"Warning: Invalid step_loss at step {t}: {step_loss.item()}")
-                print(f"  logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}")
-                print(f"  log_probs stats: min={log_probs.min().item():.4f}, max={log_probs.max().item():.4f}")
-                # Skip this step
-                continue
-            
+            step_loss = -(y_one_hot * log_probs_safe).sum(dim=-1).mean()
             loss += step_loss
             valid_steps += 1
 
@@ -364,15 +374,7 @@ class PointerTransformer(nn.Module):
             print(f"    Sample logits (first 5): {test_logits[0, :5].tolist()}")
             return torch.tensor(1e6, device=device, requires_grad=True)
         
-        final_loss = loss / valid_steps
-        
-        # Check final loss before returning
-        if torch.isnan(final_loss) or torch.isinf(final_loss):
-            print(f"Error: Final loss is invalid: {final_loss.item()}")
-            print(f"  loss={loss.item()}, valid_steps={valid_steps}")
-            return torch.tensor(1e6, device=device, requires_grad=True)
-        
-        return final_loss
+        return loss / valid_steps
 
     @torch.no_grad()
 
