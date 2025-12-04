@@ -12,6 +12,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from sklearn.cluster import KMeans
+from tqdm import tqdm
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -373,7 +374,7 @@ def main():
         count = 0
         step_count = 0
         
-        for batch_idx, (coords, target_idx) in enumerate(train_dataloader):
+        for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
