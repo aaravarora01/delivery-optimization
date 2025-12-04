@@ -404,34 +404,8 @@ def main():
             X = node_features(coords)
             
             if args.use_gnn:
-                # Ensure coords is 3D for knn_adj
-                coords_3d = coords
-                while coords_3d.dim() < 3:
-                    coords_3d = coords_3d.unsqueeze(0)
-                while coords_3d.dim() > 3:
-                    coords_3d = coords_3d.squeeze(0)
-                
-                adj = knn_adj(coords_3d, k=min(8, coords_3d.shape[1]-1))
-                
-                # Ensure adj has batch dimension
-                if adj.dim() == 2:
-                    adj = adj.unsqueeze(0)  # (N, N) -> (1, N, N)
-                
-                # Ensure X has batch dimension for GNN
-                if X.dim() == 2:
-                    X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
-                
+                adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
                 X = gnn(X, adj.to(args.device))
-                
-                # Ensure X is still 3D after GNN (GNN should preserve batch dim, but check)
-                if X.dim() == 2:
-                    X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
-                elif X.dim() == 3 and X.shape[0] != coords.shape[0]:
-                    # If batch dimension changed, fix it
-                    if X.shape[0] == X.shape[1]:
-                        # GNN output is (N, N, d) instead of (1, N, d) - take first batch
-                        X = X[0:1]  # (1, N, d)
-                
                 del adj  # Free memory
             
             edge_feats = edge_bias_features(coords)
@@ -443,6 +417,11 @@ def main():
             else:
                 loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
+            # Debug: print loss value for first few batches
+            if batch_idx < 3:
+                print(f"DEBUG batch {batch_idx}: loss={loss.item()}, loss type={type(loss)}, loss shape={loss.shape if hasattr(loss, 'shape') else 'scalar'}")
+                print(f"  X shape: {X.shape}, target_idx shape: {target_idx.shape}")
+            
             # Free intermediate tensors
             del X, edge_feats
             
@@ -450,6 +429,10 @@ def main():
             if torch.isnan(loss) or torch.isinf(loss):
                 if batch_idx < 5:  # Only print first few for debugging
                     print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
+                    # Try to get more info about why
+                    print(f"  Loss value: {loss}")
+                    print(f"  Is NaN: {torch.isnan(loss)}")
+                    print(f"  Is Inf: {torch.isinf(loss)}")
                 del loss
                 continue
             

@@ -228,6 +228,7 @@ class PointerTransformer(nn.Module):
         """
 
         B,N,_ = x.shape
+        print(f"DEBUG forward_teacher_forced: B={B}, N={N}, x.shape={x.shape}, target_idx.shape={target_idx.shape}")  # Add this
 
         device = x.device
 
