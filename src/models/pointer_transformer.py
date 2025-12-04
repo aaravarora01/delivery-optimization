@@ -10,6 +10,8 @@ import torch.nn as nn
 
 import torch.nn.functional as F
 
+import torch.utils.checkpoint as checkpoint
+
 def _positional_encoding(n, d, device):
 
     pe = torch.zeros(n, d, device=device)
@@ -104,7 +106,10 @@ class PointerTransformer(nn.Module):
 
         h = h + _positional_encoding(h.size(1), h.size(2), h.device)
 
-        H = self.encoder(h)  # (B,N,D)
+        if self.training:
+            H = checkpoint.checkpoint(self.encoder, h)
+        else:
+            H = self.encoder(h)
 
         return H
 
@@ -139,7 +144,10 @@ class PointerTransformer(nn.Module):
 
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
-        D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
+        if self.training:
+            D = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
+        else:
+            D = self.decoder(tgt, H, tgt_mask=tgt_mask)
         
         # Check decoder output
         if torch.isnan(D).any() or torch.isinf(D).any():
