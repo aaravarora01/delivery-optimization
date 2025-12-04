@@ -429,16 +429,11 @@ class PointerTransformer(nn.Module):
             
             # Convert to scalar for batch size 1, keep tensor for batch > 1
             if B == 1:
-                # Explicitly convert to Python int
-                if choice.numel() == 1:
-                    choice_val = int(choice.item())
-                else:
-                    choice_val = int(choice[0].item())
-                seq.append(choice_val)
-                choice_tensor = choice  # Keep tensor for indexing
+                seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
+                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1,N)
             else:
-                seq.append(choice)
-                choice_tensor = choice
+                seq_tensor = torch.stack(seq, dim=1)  # (B,N)
+
 
             # Update mask - use tensor version for scatter
             mask_visited = mask_visited.scatter(1, choice_tensor.unsqueeze(1), True)
@@ -457,15 +452,17 @@ class PointerTransformer(nn.Module):
             print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
         
         if B == 1:
-            # Ensure seq is a flat list of integers - add debug
-            if len(seq) > 0 and not isinstance(seq[0], (int, float)):
-                print(f"Error: seq contains non-scalar values! First item type: {type(seq[0])}, value: {seq[0]}")
-            
-            seq_flat = [int(s) for s in seq]  # Force all to int
+            seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
+            seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1,N)
+        else:
+            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
+
             
             # Create tensor explicitly as 1D
             try:
-                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)  # Should be (N,)
+                seq_flat = [int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in seq]
+                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device).unsqueeze(0)  # (1, N)
+
             except Exception as e:
                 print(f"Error creating tensor from seq_flat: {e}")
                 print(f"  seq_flat type: {type(seq_flat)}, length: {len(seq_flat)}")
@@ -496,9 +493,9 @@ class PointerTransformer(nn.Module):
                 print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
                 print(f"  Forcing reshape to (1, {N})")
                 seq_tensor = seq_tensor.view(1, N)
-        else:
-            # Handle batch size > 1
-            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
+            else:
+                # Handle batch size > 1
+                seq_tensor = torch.stack(seq, dim=1)  # (B,N)
         
         print(f"DEBUG greedy_decode returning: shape={seq_tensor.shape}")  # Add this line
         return seq_tensor
