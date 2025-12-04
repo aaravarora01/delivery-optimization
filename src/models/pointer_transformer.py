@@ -265,9 +265,12 @@ class PointerTransformer(nn.Module):
             has_pos_inf = (logits == float('inf')).any()  # Only positive infinity is invalid
             if has_nan or has_pos_inf:
                 consecutive_invalid += 1
-                print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
-                print(f"  Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
-                      f"nan_count={torch.isnan(logits).sum().item()}, pos_inf_count={(logits == float('inf')).sum().item()}")
+                if t < 3:  # Only print first few for debugging
+                    print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Consecutive invalid: {consecutive_invalid}")
+                    print(f"  Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
+                          f"nan_count={torch.isnan(logits).sum().item()}, pos_inf_count={(logits == float('inf')).sum().item()}")
+                    print(f"  H stats: min={H.min().item():.4f}, max={H.max().item():.4f}")
+                    print(f"  tgt stats: min={tgt.min().item():.4f}, max={tgt.max().item():.4f}")
                 
                 # If too many consecutive invalid steps, break to avoid infinite loop
                 if consecutive_invalid >= max_consecutive_invalid:
@@ -342,7 +345,6 @@ class PointerTransformer(nn.Module):
         return loss / valid_steps
 
     @torch.no_grad()
-
     def greedy_decode(self, x, edge_feats=None):
 
         B,N,_ = x.shape
@@ -357,21 +359,34 @@ class PointerTransformer(nn.Module):
 
         seq = []
 
-        for _ in range(N):
+        for step in range(N):
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
 
             choice = torch.argmax(logits, dim=1)  # (B,)
+            
+            # Ensure choice is a scalar for batch size 1
+            if B == 1:
+                choice = choice.item() if choice.numel() == 1 else choice[0].item()
+                seq.append(choice)
+            else:
+                seq.append(choice)
 
-            seq.append(choice)
+            mask_visited = mask_visited.scatter(1, choice.unsqueeze(1) if isinstance(choice, torch.Tensor) else torch.tensor([[choice]], device=device), True)
 
-            mask_visited = mask_visited.scatter(1, choice.unsqueeze(1), True)
-
-            next_embed = H[torch.arange(B, device=device), choice]
+            next_embed = H[torch.arange(B, device=device), choice if isinstance(choice, torch.Tensor) else torch.tensor([choice], device=device)]
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
+            
+            # Safety check: if we've visited all nodes, break early
+            if mask_visited.all():
+                break
 
-        seq = torch.stack(seq, dim=1)  # (B,N)
+        # Convert to tensor properly
+        if B == 1:
+            seq = torch.tensor(seq, dtype=torch.long, device=device).unsqueeze(0)  # (1, N)
+        else:
+            seq = torch.stack(seq, dim=1)  # (B,N)
 
         return seq
 
