@@ -355,8 +355,6 @@ class PointerTransformer(nn.Module):
 
         B,N,_ = x.shape
 
-        print(f"DEBUG greedy_decode: B={B}, N={N}")  # Add this line
-
         device = x.device
 
         H = self.encode(x)
@@ -442,6 +440,9 @@ class PointerTransformer(nn.Module):
                 print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
                 print(f"  Forcing reshape to (1, {N})")
                 seq_tensor = seq_tensor.view(1, N)
+        else:
+            # Handle batch size > 1
+            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
         
         print(f"DEBUG greedy_decode returning: shape={seq_tensor.shape}")  # Add this line
         return seq_tensor

@@ -111,12 +111,15 @@ def evaluate_zone_predictions(
         raise ValueError("Zone has fewer than 2 stops; cannot evaluate.")
     
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32, device=device).unsqueeze(0)
+    print(f"DEBUG: coords shape after unsqueeze: {coords.shape}, zone_df length: {len(zone_df)}")
     
     # Get features
     X = node_features(coords)
+    print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
         adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
         X = gnn(X, adj.to(device))
+        print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
     
