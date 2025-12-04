@@ -1,15 +1,10 @@
 # src/models/pointer_transformer.py
 
 from dataclasses import dataclass
-
 from typing import Optional, Tuple
-
 import math, torch
-
 import torch.nn as nn
-
 import torch.nn.functional as F
-
 import torch.utils.checkpoint as checkpoint
 
 def _positional_encoding(n, d, device):
