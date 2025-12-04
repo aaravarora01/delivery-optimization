@@ -300,7 +300,7 @@ class PointerTransformer(nn.Module):
             
             # Compute cross-entropy loss with smoothed one-hot targets
             logits = logits.clone()
-            logits[mask_visited] = -1e9
+            logits[mask_visited] = -1e4  # Use -1e4 instead of -1e9 for FP16 compatibility
             log_probs = F.log_softmax(logits, dim=-1)
             log_probs_safe = log_probs
             
