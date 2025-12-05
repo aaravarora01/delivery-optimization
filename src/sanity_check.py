@@ -154,15 +154,19 @@ def test_overfitting(args):
     # Initialize weights
     def init_weights(m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.1)
+            nn.init.xavier_uniform_(m.weight, gain=1.0)  # Changed from 0.1 for numerical stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0.0)
         elif isinstance(m, nn.Parameter):
-            nn.init.normal_(m, mean=0.0, std=0.01)
+            nn.init.normal_(m, mean=0.0, std=0.02)  # Changed from 0.01 for numerical stability
     
     model.apply(init_weights)
     if gnn:
         gnn.apply(init_weights)
+    
+    # Initialize query_start consistently
+    if hasattr(model, 'query_start'):
+        nn.init.normal_(model.query_start, mean=0.0, std=0.02)
     
     # Optimizer with higher learning rate for overfitting
     opt = AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
@@ -576,15 +580,19 @@ def check_teacher_forcing_alignment(args):
     # Initialize weights
     def init_weights(m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.1)
+            nn.init.xavier_uniform_(m.weight, gain=1.0)  # Changed from 0.1 for numerical stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0.0)
         elif isinstance(m, nn.Parameter):
-            nn.init.normal_(m, mean=0.0, std=0.01)
+            nn.init.normal_(m, mean=0.0, std=0.02)  # Changed from 0.01 for numerical stability
     
     model.apply(init_weights)
     if gnn:
         gnn.apply(init_weights)
+    
+    # Initialize query_start consistently
+    if hasattr(model, 'query_start'):
+        nn.init.normal_(model.query_start, mean=0.0, std=0.02)
     
     model.eval()
     if gnn:
