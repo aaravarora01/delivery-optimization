@@ -317,7 +317,7 @@ class PointerTransformer(nn.Module):
             # Replace any NaN/inf in logits after adding bias
             logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
-        logits = logits.masked_fill(mask_visited, float("-inf"))
+        logits = logits.masked_fill(mask_visited, float(-1e9))
         
         # DEBUG: Final logits check
         print(f"Final logits shape: {logits.shape}, finite: {torch.isfinite(logits).all().item()}, "
