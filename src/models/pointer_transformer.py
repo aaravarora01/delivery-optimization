@@ -151,7 +151,16 @@ class PointerTransformer(nn.Module):
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
+        q = torch.clamp(q, min=-10.0, max=10.0)
+        # TEMPORARILY REMOVE normalization to test
+        # q_norm = torch.norm(q, dim=-1, keepdim=True) + 1e-8
+        # q = q / q_norm
+
         keys = self.ptr_proj(H)      # (B,N,D)
+        keys = torch.clamp(keys, min=-10.0, max=10.0)
+        # TEMPORARILY REMOVE normalization to test
+        # keys_norm = torch.norm(keys, dim=-1, keepdim=True) + 1e-8
+        # keys = keys / keys_norm
 
         # Standard scaled dot-product attention WITHOUT aggressive normalization
         scale = math.sqrt(keys.size(-1))
