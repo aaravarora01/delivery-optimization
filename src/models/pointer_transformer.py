@@ -156,16 +156,45 @@ class PointerTransformer(nn.Module):
 
         """
 
+        # DEBUG: Check inputs
+        print(f"\n=== DEBUG decode_step ===")
+        print(f"Input H shape: {H.shape}, finite: {torch.isfinite(H).all().item()}, "
+              f"min: {H.min().item():.6f}, max: {H.max().item():.6f}, "
+              f"mean: {H.mean().item():.6f}, std: {H.std().item():.6f}")
+        if not torch.isfinite(H).all():
+            print(f"  ⚠️  H (encoder output) has NaN/inf! Count: {(~torch.isfinite(H)).sum().item()}")
+            H = torch.where(torch.isfinite(H), H, torch.zeros_like(H))
+        
+        print(f"Input tgt shape: {tgt.shape}, finite: {torch.isfinite(tgt).all().item()}, "
+              f"min: {tgt.min().item():.6f}, max: {tgt.max().item():.6f}, "
+              f"mean: {tgt.mean().item():.6f}, std: {tgt.std().item():.6f}")
+        if not torch.isfinite(tgt).all():
+            print(f"  ⚠️  tgt (decoder input) has NaN/inf! Count: {(~torch.isfinite(tgt)).sum().item()}")
+            tgt = torch.where(torch.isfinite(tgt), tgt, torch.zeros_like(tgt))
+        
+        if edge_feats is not None:
+            print(f"Input edge_feats shape: {edge_feats.shape}, finite: {torch.isfinite(edge_feats).all().item()}, "
+                  f"min: {edge_feats.min().item():.6f}, max: {edge_feats.max().item():.6f}")
+            if not torch.isfinite(edge_feats).all():
+                print(f"  ⚠️  edge_feats has NaN/inf! Count: {(~torch.isfinite(edge_feats)).sum().item()}")
+        
+        print(f"mask_visited shape: {mask_visited.shape}, sum: {mask_visited.sum().item()}/{mask_visited.numel()}")
+
         # standard transformer decoding
-
         T = tgt.size(1)
-
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
         
+        # DEBUG: Check decoder output
+        print(f"Decoder output D shape: {D.shape}, finite: {torch.isfinite(D).all().item()}, "
+              f"min: {D.min().item():.6f}, max: {D.max().item():.6f}, "
+              f"mean: {D.mean().item():.6f}, std: {D.std().item():.6f}")
+        if not torch.isfinite(D).all():
+            print(f"  ⚠️  Decoder output D has NaN/inf! Count: {(~torch.isfinite(D)).sum().item()}")
+            D = torch.where(torch.isfinite(D), D, torch.zeros_like(D))
+        
         # More aggressive clipping for numerical stability
-        # Use smaller range to prevent extreme values that can cause NaN
         D = torch.clamp(D, min=-100.0, max=100.0)
         
         # Replace any NaN/inf with zeros as fallback
@@ -173,25 +202,68 @@ class PointerTransformer(nn.Module):
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
         
-        # Replace any NaN/inf in query with zeros
-        q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        # DEBUG: Check query after projection
+        print(f"Query q (after out_proj) shape: {q.shape}, finite: {torch.isfinite(q).all().item()}, "
+              f"min: {q.min().item():.6f}, max: {q.max().item():.6f}, "
+              f"mean: {q.mean().item():.6f}, std: {q.std().item():.6f}")
+        if not torch.isfinite(q).all():
+            print(f"  ⚠️  Query q after out_proj has NaN/inf! Count: {(~torch.isfinite(q)).sum().item()}")
+            q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        
+        q = torch.clamp(q, min=-10.0, max=10.0)
         
         # Normalize query to prevent extreme values
         q_norm = torch.norm(q, dim=-1, keepdim=True) + 1e-8
+        print(f"q_norm: min={q_norm.min().item():.6f}, max={q_norm.max().item():.6f}, mean={q_norm.mean().item():.6f}")
+        if (q_norm < 1e-7).any():
+            print(f"  ⚠️  q_norm is very small! min={q_norm.min().item():.10f}")
+        
         q = q / q_norm
+        
+        # DEBUG: Check after normalization
+        print(f"Query q (after norm) shape: {q.shape}, finite: {torch.isfinite(q).all().item()}, "
+              f"min: {q.min().item():.6f}, max: {q.max().item():.6f}, "
+              f"mean: {q.mean().item():.6f}, std: {q.std().item():.6f}")
+        if not torch.isfinite(q).all():
+            print(f"  ⚠️  Query q after normalization has NaN/inf! Count: {(~torch.isfinite(q)).sum().item()}")
+            q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
 
         keys = self.ptr_proj(H)      # (B,N,D)
         
-        # Replace any NaN/inf in keys with zeros
-        keys = torch.where(torch.isfinite(keys), keys, torch.zeros_like(keys))
+        # DEBUG: Check keys after projection
+        print(f"Keys (after ptr_proj) shape: {keys.shape}, finite: {torch.isfinite(keys).all().item()}, "
+              f"min: {keys.min().item():.6f}, max: {keys.max().item():.6f}, "
+              f"mean: {keys.mean().item():.6f}, std: {keys.std().item():.6f}")
+        if not torch.isfinite(keys).all():
+            print(f"  ⚠️  Keys after ptr_proj has NaN/inf! Count: {(~torch.isfinite(keys)).sum().item()}")
+            keys = torch.where(torch.isfinite(keys), keys, torch.zeros_like(keys))
+        
+        keys = torch.clamp(keys, min=-10.0, max=10.0)
         
         # Normalize keys to prevent extreme values
         keys_norm = torch.norm(keys, dim=-1, keepdim=True) + 1e-8
+        print(f"keys_norm: min={keys_norm.min().item():.6f}, max={keys_norm.max().item():.6f}, mean={keys_norm.mean().item():.6f}")
+        if (keys_norm < 1e-7).any():
+            print(f"  ⚠️  keys_norm is very small! min={keys_norm.min().item():.10f}")
+        
         keys = keys / keys_norm
+        
+        # DEBUG: Check keys after normalization
+        if not torch.isfinite(keys).all():
+            print(f"  ⚠️  Keys after normalization has NaN/inf! Count: {(~torch.isfinite(keys)).sum().item()}")
+            keys = torch.where(torch.isfinite(keys), keys, torch.zeros_like(keys))
 
         # Einsum with epsilon in sqrt to prevent division issues
         scale = math.sqrt(keys.size(-1)) + 1e-8
         logits = torch.einsum("bd,bnd->bn", q, keys) / scale  # pointer scores
+        
+        # DEBUG: Check logits after einsum
+        print(f"Logits (after einsum) shape: {logits.shape}, finite: {torch.isfinite(logits).all().item()}, "
+              f"min: {logits.min().item():.6f}, max: {logits.max().item():.6f}, "
+              f"mean: {logits.mean().item():.6f}, std: {logits.std().item():.6f}")
+        if not torch.isfinite(logits).all():
+            print(f"  ⚠️  Logits after einsum has NaN/inf! Count: {(~torch.isfinite(logits)).sum().item()}")
+            logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
         
         # Clamp logits immediately after einsum
         logits = torch.clamp(logits, min=-50.0, max=50.0)
@@ -200,33 +272,60 @@ class PointerTransformer(nn.Module):
         logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
         if self.edge_bias is not None and edge_feats is not None:
-
             # Replace any NaN/inf in edge_feats with zeros (defensive check)
-            edge_feats = torch.where(torch.isfinite(edge_feats), edge_feats, torch.zeros_like(edge_feats))
+            if not torch.isfinite(edge_feats).all():
+                print(f"  ⚠️  edge_feats before edge_bias has NaN/inf! Count: {(~torch.isfinite(edge_feats)).sum().item()}")
+                edge_feats = torch.where(torch.isfinite(edge_feats), edge_feats, torch.zeros_like(edge_feats))
 
             # Use last chosen index to index edge_feats for bias against candidates
-
             # We approximate with a pooled bias: bias_i = mean_j(bias_ij) to stay cheap
-
             bias = self.edge_bias(edge_feats)  # (B,N,N)
             
-            # Replace any NaN/inf in bias with zeros
-            bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
-
+            # DEBUG: Check bias after edge_bias network
+            print(f"Bias (after edge_bias) shape: {bias.shape}, finite: {torch.isfinite(bias).all().item()}, "
+                  f"min: {bias.min().item():.6f}, max: {bias.max().item():.6f}, "
+                  f"mean: {bias.mean().item():.6f}, std: {bias.std().item():.6f}")
+            if not torch.isfinite(bias).all():
+                print(f"  ⚠️  Bias after edge_bias has NaN/inf! Count: {(~torch.isfinite(bias)).sum().item()}")
+                bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
+            
             bias = bias.mean(dim=1)            # (B,N)
+            
+            # DEBUG: Check bias after mean
+            print(f"Bias (after mean) shape: {bias.shape}, finite: {torch.isfinite(bias).all().item()}, "
+                  f"min: {bias.min().item():.6f}, max: {bias.max().item():.6f}, "
+                  f"mean: {bias.mean().item():.6f}, std: {bias.std().item():.6f}")
             
             # Clamp bias after mean to prevent extreme values
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             
             # Replace any NaN/inf after mean with zeros
-            bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
+            if not torch.isfinite(bias).all():
+                print(f"  ⚠️  Bias after mean has NaN/inf! Count: {(~torch.isfinite(bias)).sum().item()}")
+                bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
 
             logits = logits + bias
+            
+            # DEBUG: Check logits after adding bias
+            print(f"Logits (after adding bias) shape: {logits.shape}, finite: {torch.isfinite(logits).all().item()}, "
+                  f"min: {logits.min().item():.6f}, max: {logits.max().item():.6f}, "
+                  f"mean: {logits.mean().item():.6f}, std: {logits.std().item():.6f}")
+            if not torch.isfinite(logits).all():
+                print(f"  ⚠️  Logits after adding bias has NaN/inf! Count: {(~torch.isfinite(logits)).sum().item()}")
+                logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
             
             # Replace any NaN/inf in logits after adding bias
             logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
         logits = logits.masked_fill(mask_visited, float("-inf"))
+        
+        # DEBUG: Final logits check
+        print(f"Final logits shape: {logits.shape}, finite: {torch.isfinite(logits).all().item()}, "
+              f"min: {logits.min().item():.6f}, max: {logits.max().item():.6f}, "
+              f"mean: {logits.mean().item():.6f}, std: {logits.std().item():.6f}")
+        if not torch.isfinite(logits).all():
+            print(f"  ⚠️  Final logits has NaN/inf! Count: {(~torch.isfinite(logits)).sum().item()}")
+        print(f"=== END DEBUG decode_step ===\n")
 
         # Check if all logits are masked (all -inf) - this would cause NaN in softmax/log_softmax
         # This shouldn't happen in normal operation, but handle gracefully to prevent NaN
