@@ -114,6 +114,7 @@ def evaluate_zone_predictions(
     
     # Get features
     X = node_features(coords)
+    print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
         # Ensure coords is 3D for knn_adj
         coords_3d = coords
@@ -138,6 +139,7 @@ def evaluate_zone_predictions(
         if X.dim() == 2:
             X = X.unsqueeze(0)
             
+        print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
     
@@ -146,8 +148,29 @@ def evaluate_zone_predictions(
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
         pred_order_indices = pred_order_indices.reshape(-1).cpu().numpy().tolist()
     
-    # Validate indices are in range
+    # DEBUG: Check if predictions are valid and what they look like
     num_stops = len(zone_df)
+    
+    # Check for duplicates or missing indices
+    unique_indices = set(pred_order_indices)
+    if len(unique_indices) != num_stops:
+        missing = set(range(num_stops)) - unique_indices
+        duplicates = [idx for idx in pred_order_indices if pred_order_indices.count(idx) > 1]
+        print(f"WARNING: Invalid prediction - missing: {list(missing)[:5]}, duplicates: {list(set(duplicates))[:5]}")
+        # Fix by replacing duplicates/missing (temporary fix for debugging)
+        # This shouldn't happen if model is working correctly
+    
+    # Check if prediction is just sequential [0,1,2,3,...]
+    is_sequential = pred_order_indices == list(range(num_stops))
+    if is_sequential:
+        print(f"WARNING: Model predicted sequential order [0,1,2,...] - model may not be learning")
+    
+    # Print first few predictions for debugging (only for first zone)
+    if len(zone_df) <= 10:  # Only for small zones to avoid spam
+        print(f"DEBUG: Predicted indices: {pred_order_indices}")
+        print(f"DEBUG: True order indices: {[i for i, sid in enumerate(zone_df['stop_id'].tolist()) for true_sid in zone_df.sort_values('seq')['stop_id'].tolist() if sid == true_sid]}")
+    
+    # Validate indices are in range
     if len(pred_order_indices) != num_stops:
         raise ValueError(f"Predicted sequence length ({len(pred_order_indices)}) doesn't match zone size ({num_stops})")
     
