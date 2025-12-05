@@ -116,7 +116,6 @@ def evaluate_zone_predictions(
     
     # Get features
     X = node_features(coords)
-    print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
         # Ensure coords is 3D for knn_adj
         coords_3d = coords
@@ -140,8 +139,6 @@ def evaluate_zone_predictions(
         # Ensure X is still 3D after GNN
         if X.dim() == 2:
             X = X.unsqueeze(0)
-            
-        print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
     
