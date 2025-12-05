@@ -7,15 +7,12 @@ from datetime import datetime
 
 import numpy as np, pandas as pd, torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from baseline import kendall_tau
 
 from sklearn.cluster import KMeans
 from tqdm import tqdm
-
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -53,58 +50,6 @@ def build_zones(df_route, max_zone=80, seed=0):
         zones.append(df_route[z==c].copy().reset_index(drop=True))
     
     return zones
-
-def run_validation_zone(model, gnn, zone_df, device, use_gnn):
-    # Build coords + target exactly like training
-    coords, target_idx = collate_zone(zone_df)       # (1,N,2), (1,N)
-
-    # Move to device
-    coords = coords.to(device)
-    target_idx = target_idx.to(device)
-
-    # Ensure correct shapes
-    while coords.dim() > 3:
-        coords = coords.squeeze(0)
-    if coords.dim() < 3:
-        coords = coords.unsqueeze(0)
-
-    while target_idx.dim() > 2:
-        target_idx = target_idx.squeeze(0)
-    if target_idx.dim() < 2:
-        target_idx = target_idx.unsqueeze(0)
-
-    # Compute node features identically to training
-    X = node_features(coords)
-
-    # GNN (same as training)
-    if use_gnn and gnn is not None:
-        adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
-        X = gnn(X, adj.to(device))
-        del adj
-
-    # Edge features (must match training!)
-    edge_feats = edge_bias_features(coords)
-
-    # -------- Run greedy decoding exactly like training --------
-    model.eval()
-    with torch.no_grad():
-        seq, length = model.greedy_decode(
-            X, edge_feats=edge_feats
-        )
-
-    # Convert predictions into numpy list
-    pred_order = seq.squeeze(0).cpu().tolist()
-
-    # Compute metrics using the same ground truth ordering
-    true_order = target_idx.squeeze(0).cpu().tolist()
-
-    return {
-        "kendall_tau": float("nan") if len(true_order) <= 1 else
-            kendall_tau(pred_order, true_order),
-        "sequence_accuracy": float(pred_order == true_order),
-        "distance_ratio": 1.0,   # optional — compute if needed
-        "position_acc_k1": float(pred_order[0] == true_order[0]),
-    }
 
 def collate_zone(zone_df):
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32).unsqueeze(0)  # (1,N,2)
@@ -213,14 +158,12 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     
     print("Generated visualization plots")
 
-
 class RouteZoneDataset(Dataset):
-    def __init__(self, df, routes, max_zone=80, min_stops=3, use_gnn=False, max_zones=None):
+    def __init__(self, df, routes, max_zone=80, min_stops=3):
         self.df = df
         self.routes = routes
         self.max_zone = max_zone
         self.min_stops = min_stops
-        self.use_gnn = use_gnn
         self.zones = []
         
         print(f"Building zones from {len(routes)} routes (max_zone={max_zone})...")
@@ -229,19 +172,7 @@ class RouteZoneDataset(Dataset):
             route_zones = build_zones(r, max_zone=max_zone)
             for z in route_zones:
                 if len(z) >= min_stops:
-                    coords_tensor = torch.tensor(z[['lat','lon']].to_numpy(), dtype=torch.float32)
-                    adj = None
-                    if self.use_gnn:
-                        coords_tensor = coords_tensor.unsqueeze(0)
-                        adj = knn_adj(coords_tensor, k=min(8, coords_tensor.shape[1]-1))
-                    self.zones.append({'zone': z, 'adj': adj})
-                    
-                    # Stop if we've reached the limit
-                    if max_zones is not None and len(self.zones) >= max_zones:
-                        break
-            # Break outer loop if limit reached
-            if max_zones is not None and len(self.zones) >= max_zones:
-                break
+                    self.zones.append(z)
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -249,7 +180,7 @@ class RouteZoneDataset(Dataset):
         return len(self.zones)
     
     def __getitem__(self, idx):
-        return collate_zone(self.zones[idx]['zone'])
+        return collate_zone(self.zones[idx])
 
 def main():
     ap = argparse.ArgumentParser(description="Train Pointer Transformer for TSP - Optimized for Full Compute")
@@ -277,7 +208,6 @@ def main():
     # Data args
     ap.add_argument("--max_zone", type=int, default=60, help="Maximum zone size (reduced for memory)")
     ap.add_argument("--max_routes", type=int, default=None, help="Limit number of routes (None = use all training data)")
-    ap.add_argument("--max_zones", type=int, default=None, help="Limit number of zones in training dataset (None = use all)")
     ap.add_argument("--val_split", type=float, default=0.1, help="Fraction of routes to use for validation")
     ap.add_argument("--val_eval_freq", type=int, default=1, help="Evaluate validation every N epochs")
     ap.add_argument("--val_num_zones", type=int, default=50, help="Number of zones to evaluate during validation")
@@ -331,8 +261,8 @@ def main():
     print(f"Split: {len(train_routes)} training routes, {len(val_routes)} validation routes")
     
     # Create datasets
-    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn, max_zones=args.max_zones)
-    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3, use_gnn=args.use_gnn)
+    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3)
+    val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3)
     
     print(f"Training zones: {len(train_dataset.zones)}, Validation zones: {len(val_dataset.zones)}")
     
@@ -562,79 +492,13 @@ def main():
             model.eval()
             if gnn:
                 gnn.eval()
-            debug_count = 0
-            for zone_item in val_zones_sample:
+            
+            for zone_df in val_zones_sample:
                 try:
-                    # Extract zone DataFrame from dict if needed
-                    if isinstance(zone_item, dict):
-                        zone_df = zone_item['zone']
-                    else:
-                        zone_df = zone_item
-
-                    if debug_count < 2:
-                        try:
-                            # Prepare coords/target the same way collate_zone does
-                            coords_val, target_idx_val = collate_zone(zone_df)  # (1,N,2), (1,N)
-                            # Squeeze / ensure dims exactly like training pipeline
-                            while coords_val.dim() > 3:
-                                coords_val = coords_val.squeeze(0)
-                            if coords_val.dim() < 3:
-                                coords_val = coords_val.unsqueeze(0)
-                            while target_idx_val.dim() > 2:
-                                target_idx_val = target_idx_val.squeeze(0)
-                            if target_idx_val.dim() < 2:
-                                target_idx_val = target_idx_val.unsqueeze(0)
-
-                            coords_val = coords_val.to(args.device)
-                            target_idx_val = target_idx_val.to(args.device)
-
-                            # Compute node features (and GNN if used)
-                            X_val = node_features(coords_val)
-                            if args.use_gnn and gnn is not None:
-                                adj_val = knn_adj(coords_val, k=max(1, min(8, coords_val.shape[1]-1)))
-                                X_val = gnn(X_val, adj_val.to(args.device))
-                                del adj_val
-                            edge_feats_val = edge_bias_features(coords_val)
-
-                            # Get encoder outputs and first-step logits
-                            model.eval()
-                            with torch.no_grad():
-                                H_val = model.encode(X_val)                  # (1,N,D)
-                                tgt0 = model.query_start.expand(1, 1, -1).to(args.device)  # (1,1,D)
-                                mask0 = torch.zeros(1, X_val.size(1), dtype=torch.bool, device=args.device)
-
-                                logits0 = model.decode_step(H_val, tgt0, mask0, edge_feats=edge_feats_val if edge_feats_val is not None else None)  # (1,N)
-                                probs0 = F.softmax(logits0, dim=-1)
-                                pred0 = torch.argmax(probs0, dim=-1)  # (1,)
-
-                            # Print compact debug info
-                            logits0_flat = logits0[0].cpu()
-                            probs0_flat = probs0[0].cpu()
-                            topk = 5
-                            topk_vals, topk_idx = torch.topk(logits0_flat, k=min(topk, logits0_flat.numel()))
-                            true_first = int(target_idx_val[0, 0].cpu().item())
-                            pred_first = int(pred0[0].cpu().item())
-
-                            print("\n--- VALIDATION DIAGNOSTIC ---")
-                            print("coords shape:", coords_val.shape)
-                            print("target_idx (first 10):", target_idx_val[0, :min(10, target_idx_val.size(1))].cpu().tolist())
-                            print(f"First-step logits (first 10): {logits0_flat[:10].tolist()}")
-                            print(f"First-step probs  (first 10): {probs0_flat[:10].tolist()}")
-                            print("Top-k logits indices:", topk_idx.tolist())
-                            print("Top-k logits values: ", topk_vals.tolist())
-                            print("Predicted first index:", pred_first, " True first index:", true_first)
-                            print("mask0 sum (visited):", mask0.sum().item())
-                            print("Is true_first masked in mask0?:", bool(mask0[0, true_first].item()))
-                            print("--- END DIAGNOSTIC ---\n")
-
-                            # restore train mode (we left model.eval())
-                            model.train()
-                        except Exception as e:
-                            print("Diagnostic failed with exception:", e)
-                        debug_count += 1
-                    metrics = run_validation_zone(model, gnn, zone_df, args.device, args.use_gnn)
-
-
+                    metrics = evaluate_zone_predictions(
+                        model, gnn, zone_df, args.device, 
+                        use_gnn=args.use_gnn, greedy=True
+                    )
                     val_metrics.append(metrics)
                 except Exception as e:
                     print(f"Warning: Validation evaluation failed for zone: {e}")
@@ -733,8 +597,10 @@ def main():
     
     for zone_df in final_eval_zones:
         try:
-            metrics = run_validation_zone(model, gnn, zone_df, args.device, args.use_gnn)
-
+            metrics = evaluate_zone_predictions(
+                model, gnn, zone_df, args.device,
+                use_gnn=args.use_gnn, greedy=True
+            )
             final_metrics_list.append(metrics)
         except Exception as e:
             continue
