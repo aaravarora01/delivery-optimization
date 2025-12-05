@@ -135,11 +135,15 @@ def evaluate_zone_predictions(
         
         X = gnn(X, adj.to(device))
         
-        # CRITICAL FIX: Handle when GNN outputs (N, N, d) instead of (1, N, d)
-        if X.dim() == 3:
+        # CRITICAL FIX: Handle when GNN outputs wrong shape
+        if X.dim() == 4:
+            # GNN output is (1, N, N, d) - extract node features
+            # Take the first N nodes (first dimension after batch)
+            X = X[0, :coords.shape[1], :, :]  # (1, N, N, d) -> (N, d)
+            X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
+        elif X.dim() == 3:
             if X.shape[0] == X.shape[1]:
-                # GNN output is (N, N, d) - this is wrong, extract node features
-                # Take the first N rows (node features) and add batch dimension
+                # GNN output is (N, N, d) - extract node features
                 X = X[:coords.shape[1], :, :].unsqueeze(0)  # (N, N, d) -> (N, d) -> (1, N, d)
             elif X.shape[0] != 1:
                 # X is (B, N, d) where B != 1 - take first batch
@@ -148,8 +152,8 @@ def evaluate_zone_predictions(
             # X is (N, d) - add batch dimension
             X = X.unsqueeze(0)
         
-        # Final verification
-        if X.shape[0] != 1 or X.shape[1] != coords.shape[1]:
+        # Final verification - X must be (1, N, d)
+        if X.dim() != 3 or X.shape[0] != 1 or X.shape[1] != coords.shape[1]:
             raise ValueError(f"GNN output shape error: got {X.shape}, expected (1, {coords.shape[1]}, d_model)")
             
         print(f"DEBUG: X shape after GNN: {X.shape}")
