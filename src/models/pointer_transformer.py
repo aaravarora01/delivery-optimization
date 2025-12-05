@@ -187,7 +187,8 @@ class PointerTransformer(nn.Module):
                 actual = y.item()
                 
                 # Get logits distribution
-                logits_unmasked = logits[~mask_visited.view(-1)]
+                unmasked_mask = ~mask_visited[0]
+                logits_unmasked = logits[0][unmasked_mask]
                 
                 print(f"\n  TRAINING Step 0:")
                 print(f"    Predicted={predicted}, Actual={actual}, Match={predicted==actual}")
