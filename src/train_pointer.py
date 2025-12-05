@@ -508,7 +508,7 @@ def main():
             model.eval()
             if gnn:
                 gnn.eval()
-            
+            debug_count = 0
             for zone_item in val_zones_sample:
                 try:
                     # Extract zone DataFrame from dict if needed
