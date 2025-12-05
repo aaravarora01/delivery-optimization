@@ -218,47 +218,6 @@ def test_overfitting(args):
             # Forward pass
             loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
-            # DEBUG: Check loss value and inspect logits on first step
-            if epoch == 1 and batch_idx == 0:
-                print(f"DEBUG: First batch loss = {loss.item():.6f}")
-                print(f"DEBUG: Loss is finite: {torch.isfinite(loss).item()}")
-                
-                # Manually check what's happening in the forward pass
-                model.eval()
-                with torch.no_grad():
-                    H = model.encode(X)
-                    tgt = model.query_start.expand(1, 1, -1)
-                    mask_visited = torch.zeros(1, X.shape[1], dtype=torch.bool, device=X.device)
-                    
-                    print(f"\nDEBUG: Zone size N={X.shape[1]}")
-                    print(f"DEBUG: Checking first 5 steps of loss computation:")
-                    
-                    test_loss = 0.0
-                    for t in range(min(5, X.shape[1])):
-                        test_logits = model.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-                        test_y = target_idx[0, t].item()
-                        
-                        # Check logits
-                        log_probs = F.log_softmax(test_logits, dim=-1)
-                        step_loss = F.cross_entropy(test_logits, target_idx[:, t], label_smoothing=0.05)
-                        
-                        print(f"  Step {t}: target={test_y}, logit[target]={test_logits[0,test_y].item():.4f}, "
-                              f"log_prob[target]={log_probs[0,test_y].item():.4f}, step_loss={step_loss.item():.4f}")
-                        
-                        test_loss += step_loss.item()
-                        
-                        # Update for next step
-                        mask_visited = mask_visited.scatter(1, torch.tensor([[test_y]], device=X.device), True)
-                        next_embed = H[0, test_y]
-                        next_embed = model.embed_norm(next_embed)
-                        tgt = torch.cat([tgt, next_embed.unsqueeze(0).unsqueeze(0)], dim=1)
-                    
-                    print(f"DEBUG: Sum of first 5 step losses: {test_loss:.4f}")
-                    print(f"DEBUG: Average per step: {test_loss/5:.4f}")
-                    print(f"DEBUG: If all steps similar, total loss would be: {test_loss/5 * X.shape[1]:.4f}")
-                
-                model.train()
-            
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"Warning: Invalid loss at epoch {epoch}, batch {batch_idx}")
                 continue
@@ -266,24 +225,8 @@ def test_overfitting(args):
             # Backward pass
             opt.zero_grad()
             loss.backward()
-            
-            # DEBUG: Check gradients
-            if epoch == 1 and batch_idx == 0:
-                total_grad_norm = 0.0
-                for p in params:
-                    if p.grad is not None:
-                        total_grad_norm += p.grad.norm().item() ** 2
-                total_grad_norm = total_grad_norm ** 0.5
-                print(f"DEBUG: Gradient norm before clipping: {total_grad_norm:.6f}")
-            
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             opt.step()
-            
-            # DEBUG: Check if weights are updating
-            if epoch == 1 and batch_idx == 0:
-                # Check a sample weight
-                sample_param = list(model.parameters())[0]
-                print(f"DEBUG: Sample param value after step: {sample_param.data.flatten()[0].item():.6f}")
             
             epoch_losses.append(loss.item())
         
