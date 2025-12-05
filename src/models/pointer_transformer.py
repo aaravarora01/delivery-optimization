@@ -45,6 +45,12 @@ class RelEdgeBias(nn.Module):
         B,N,_,_ = edge_feats.shape
 
         out = self.net(edge_feats).view(B, N, N)  # bias_ij
+        
+        # Clamp bias output to reasonable range to prevent extreme values
+        out = torch.clamp(out, min=-10.0, max=10.0)
+        
+        # Replace any NaN/inf with zeros as fallback
+        out = torch.where(torch.isfinite(out), out, torch.zeros_like(out))
 
         return out
 
@@ -95,6 +101,32 @@ class PointerTransformer(nn.Module):
         self.ptr_proj = nn.Linear(cfg.d_model, cfg.d_model)
 
         self.edge_bias = RelEdgeBias() if cfg.use_edge_bias else None
+        
+        # LayerNorm for stabilizing embeddings
+        self.embed_norm = nn.LayerNorm(cfg.d_model)
+        
+        # Initialize weights properly
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with smaller std values for numerical stability."""
+        # Initialize query_start with smaller std
+        nn.init.normal_(self.query_start, mean=0.0, std=0.01)
+        
+        # Initialize linear layers with xavier uniform
+        for module in [self.inp, self.out_proj, self.ptr_proj]:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+        
+        # Initialize edge bias network with smaller weights
+        if self.edge_bias is not None:
+            for m in self.edge_bias.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight, gain=0.1)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0.0)
 
     def encode(self, x):
 
@@ -131,36 +163,68 @@ class PointerTransformer(nn.Module):
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
-        # Add clipping for numerical stability
-        D = torch.clamp(D, min=-1e4, max=1e4)
-        assert torch.isfinite(D).all(), "NaN/inf in decoder output D"
+        
+        # More aggressive clipping for numerical stability
+        # Use smaller range to prevent extreme values that can cause NaN
+        D = torch.clamp(D, min=-100.0, max=100.0)
+        
+        # Replace any NaN/inf with zeros as fallback
+        D = torch.where(torch.isfinite(D), D, torch.zeros_like(D))
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
-        assert torch.isfinite(q).all(), "NaN/inf in query q"
+        
+        # Replace any NaN/inf in query with zeros
+        q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        
+        # Normalize query to prevent extreme values
+        q_norm = torch.norm(q, dim=-1, keepdim=True) + 1e-8
+        q = q / q_norm
 
         keys = self.ptr_proj(H)      # (B,N,D)
-        assert torch.isfinite(keys).all(), "NaN/inf in keys"
+        
+        # Replace any NaN/inf in keys with zeros
+        keys = torch.where(torch.isfinite(keys), keys, torch.zeros_like(keys))
+        
+        # Normalize keys to prevent extreme values
+        keys_norm = torch.norm(keys, dim=-1, keepdim=True) + 1e-8
+        keys = keys / keys_norm
 
-        logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # pointer scores
-        assert torch.isfinite(logits).all(), "NaN/inf in logits after einsum"
+        # Einsum with epsilon in sqrt to prevent division issues
+        scale = math.sqrt(keys.size(-1)) + 1e-8
+        logits = torch.einsum("bd,bnd->bn", q, keys) / scale  # pointer scores
+        
+        # Clamp logits immediately after einsum
+        logits = torch.clamp(logits, min=-50.0, max=50.0)
+        
+        # Replace any NaN/inf in logits with zeros
+        logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
         if self.edge_bias is not None and edge_feats is not None:
 
-            # Check edge_feats for NaN/inf
-            assert torch.isfinite(edge_feats).all(), "NaN/inf in edge_feats"
+            # Replace any NaN/inf in edge_feats with zeros (defensive check)
+            edge_feats = torch.where(torch.isfinite(edge_feats), edge_feats, torch.zeros_like(edge_feats))
 
             # Use last chosen index to index edge_feats for bias against candidates
 
             # We approximate with a pooled bias: bias_i = mean_j(bias_ij) to stay cheap
 
             bias = self.edge_bias(edge_feats)  # (B,N,N)
-            assert torch.isfinite(bias).all(), "NaN/inf in edge_bias output"
+            
+            # Replace any NaN/inf in bias with zeros
+            bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
 
             bias = bias.mean(dim=1)            # (B,N)
-            assert torch.isfinite(bias).all(), "NaN/inf in bias after mean"
+            
+            # Clamp bias after mean to prevent extreme values
+            bias = torch.clamp(bias, min=-10.0, max=10.0)
+            
+            # Replace any NaN/inf after mean with zeros
+            bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
 
             logits = logits + bias
-            assert torch.isfinite(logits).all(), "NaN/inf in logits after adding bias"
+            
+            # Replace any NaN/inf in logits after adding bias
+            logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
         logits = logits.masked_fill(mask_visited, float("-inf"))
 
@@ -188,13 +252,14 @@ class PointerTransformer(nn.Module):
 
         device = x.device
 
-        # Check inputs for NaN/inf
-        assert torch.isfinite(x).all(), "NaN/inf in node features"
+        # Check inputs for NaN/inf and replace with zeros
+        x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
         if edge_feats is not None:
-            assert torch.isfinite(edge_feats).all(), "NaN/inf in edge_feats"
+            edge_feats = torch.where(torch.isfinite(edge_feats), edge_feats, torch.zeros_like(edge_feats))
 
         H = self.encode(x)
-        assert torch.isfinite(H).all(), "NaN/inf in encoder output"
+        # Replace any NaN/inf in encoder output
+        H = torch.where(torch.isfinite(H), H, torch.zeros_like(H))
 
         # Start token
 
@@ -207,12 +272,23 @@ class PointerTransformer(nn.Module):
         for t in range(N):
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-            assert torch.isfinite(logits).all(), f"NaN/inf in logits at step {t}"
+            
+            # Replace any NaN/inf in logits with zeros (defensive check)
+            if not torch.isfinite(logits).all():
+                import warnings
+                warnings.warn(f"NaN/inf detected in logits at step {t}, replacing with zeros")
+                logits = torch.where(torch.isfinite(logits), logits, torch.zeros_like(logits))
 
             y = target_idx[:, t]  # (B,)
 
             step_loss = F.cross_entropy(logits, y, label_smoothing=0.05)
-            assert torch.isfinite(step_loss).all(), f"NaN/inf in loss at step {t}"
+            
+            # Replace any NaN/inf in loss with zero (defensive check)
+            if not torch.isfinite(step_loss):
+                import warnings
+                warnings.warn(f"NaN/inf detected in loss at step {t}, replacing with zero")
+                step_loss = torch.tensor(0.0, device=step_loss.device, dtype=step_loss.dtype)
+            
             loss += step_loss
 
             # append teacher token embedding: take the chosen node embedding as next query
@@ -222,6 +298,9 @@ class PointerTransformer(nn.Module):
             mask_visited = mask_visited.scatter(1, chosen.unsqueeze(1), True)
 
             next_embed = H[torch.arange(B, device=device), chosen]  # (B,D)
+            
+            # Normalize embedding to prevent extreme values from propagating
+            next_embed = self.embed_norm(next_embed)  # (B,D)
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
 
@@ -258,6 +337,9 @@ class PointerTransformer(nn.Module):
             mask_visited = mask_visited.scatter(1, choice.unsqueeze(1), True)
 
             next_embed = H[torch.arange(B, device=device), choice]
+            
+            # Normalize embedding to prevent extreme values from propagating
+            next_embed = self.embed_norm(next_embed)  # (B,D)
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
 

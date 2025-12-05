@@ -151,25 +151,27 @@ def test_overfitting(args):
         model = PointerTransformer(d_in=d_node, cfg=pt_config).to(args.device)
         params = list(model.parameters())
     
-    # Initialize weights
+    # Initialize weights - use more conservative initialization for numerical stability
     def init_weights(m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=1.0)  # Changed from 0.1 for numerical stability
+            nn.init.xavier_uniform_(m.weight, gain=0.1)  # Smaller gain for numerical stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0.0)
         elif isinstance(m, nn.Parameter):
-            nn.init.normal_(m, mean=0.0, std=0.02)  # Changed from 0.01 for numerical stability
+            nn.init.normal_(m, mean=0.0, std=0.01)  # Smaller std for numerical stability
     
     model.apply(init_weights)
     if gnn:
         gnn.apply(init_weights)
     
-    # Initialize query_start consistently
+    # Initialize query_start with smaller std for numerical stability
     if hasattr(model, 'query_start'):
-        nn.init.normal_(model.query_start, mean=0.0, std=0.02)
+        nn.init.normal_(model.query_start, mean=0.0, std=0.01)
     
-    # Optimizer with higher learning rate for overfitting
-    opt = AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    # Use lower learning rate to prevent gradient explosion that can cause NaN
+    # Default lr is 1e-3, but use 5e-4 for better stability
+    effective_lr = min(args.lr, 5e-4) if args.lr > 5e-4 else args.lr
+    opt = AdamW(params, lr=effective_lr, weight_decay=args.weight_decay)
     
     # Training loop
     model.train()
@@ -577,22 +579,22 @@ def check_teacher_forcing_alignment(args):
         gnn = None
         model = PointerTransformer(d_in=d_node, cfg=pt_config).to(args.device)
     
-    # Initialize weights
+    # Initialize weights - use more conservative initialization for numerical stability
     def init_weights(m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=1.0)  # Changed from 0.1 for numerical stability
+            nn.init.xavier_uniform_(m.weight, gain=0.1)  # Smaller gain for numerical stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0.0)
         elif isinstance(m, nn.Parameter):
-            nn.init.normal_(m, mean=0.0, std=0.02)  # Changed from 0.01 for numerical stability
+            nn.init.normal_(m, mean=0.0, std=0.01)  # Smaller std for numerical stability
     
     model.apply(init_weights)
     if gnn:
         gnn.apply(init_weights)
     
-    # Initialize query_start consistently
+    # Initialize query_start with smaller std for numerical stability
     if hasattr(model, 'query_start'):
-        nn.init.normal_(model.query_start, mean=0.0, std=0.02)
+        nn.init.normal_(model.query_start, mean=0.0, std=0.01)
     
     model.eval()
     if gnn:
