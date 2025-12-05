@@ -376,6 +376,7 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+            
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
@@ -417,8 +418,6 @@ def main():
             
             # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
-                if batch_idx < 5:  # Only print first few for debugging
-                    print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 del loss
                 continue
             
@@ -490,10 +489,6 @@ def main():
             
             for zone_df in val_zones_sample:
                 try:
-                    # Extract zone DataFrame from dict if needed
-                    if isinstance(zone_df, dict):
-                        zone_df = zone_df['zone']
-                    
                     metrics = evaluate_zone_predictions(
                         model, gnn, zone_df, args.device, 
                         use_gnn=args.use_gnn, greedy=True
