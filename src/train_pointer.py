@@ -306,34 +306,41 @@ def train(args):
         print(f"Zones evaluated: {len(final_metrics)}")
         print("-"*80)
         
-        # Generate plot
+        # Generate plots
         if HAS_MATPLOTLIB and len(losses) > 0:
-            fig, ax1 = plt.subplots(figsize=(10, 6))
-            
-            # Plot loss on left y-axis
             epochs_all = list(range(1, len(losses) + 1))
-            ax1.plot(epochs_all, losses, 'b-', label='Loss', linewidth=2)
-            ax1.set_xlabel('Epoch', fontsize=12)
-            ax1.set_ylabel('Loss', color='b', fontsize=12)
-            ax1.tick_params(axis='y', labelcolor='b')
-            ax1.grid(True, alpha=0.3)
             
-            # Plot Kendall tau on right y-axis
-            if len(kendall_taus) > 0 and len(eval_epochs) > 0:
-                ax2 = ax1.twinx()
-                ax2.plot(eval_epochs, kendall_taus, 'r-o', label='Kendall τ', linewidth=2, markersize=6)
-                ax2.set_ylabel('Kendall τ', color='r', fontsize=12)
-                ax2.tick_params(axis='y', labelcolor='r')
-                ax2.set_ylim([0, 1.0])
-            
-            ax1.set_title('Training: Loss and Kendall τ vs Epochs', fontsize=14, fontweight='bold')
+            # Plot 1: Loss vs Epochs
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(epochs_all, losses, 'b-', linewidth=2, label='Training Loss')
+            ax.set_xlabel('Epoch', fontsize=12)
+            ax.set_ylabel('Loss', fontsize=12)
+            ax.set_title('Training Loss vs Epochs', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend()
             fig.tight_layout()
             
-            # Save plot
-            plot_path = Path('training_plot.png')
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            loss_plot_path = Path('training_loss.png')
+            plt.savefig(loss_plot_path, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"\nSaved plot to {plot_path}")
+            print(f"\nSaved loss plot to {loss_plot_path}")
+            
+            # Plot 2: Kendall Tau vs Epochs
+            if len(kendall_taus) > 0 and len(eval_epochs) > 0:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.plot(eval_epochs, kendall_taus, 'r-o', linewidth=2, markersize=6, label='Kendall τ')
+                ax.set_xlabel('Epoch', fontsize=12)
+                ax.set_ylabel('Kendall τ', fontsize=12)
+                ax.set_title('Validation Kendall τ vs Epochs', fontsize=14, fontweight='bold')
+                ax.set_ylim([0, 1.0])
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+                fig.tight_layout()
+                
+                tau_plot_path = Path('training_kendall_tau.png')
+                plt.savefig(tau_plot_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                print(f"Saved Kendall tau plot to {tau_plot_path}")
         
         return True
     else:
