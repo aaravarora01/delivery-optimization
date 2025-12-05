@@ -465,6 +465,15 @@ def main():
                 scaler.scale(loss_scaled).backward()
             else:
                 loss_scaled.backward()
+            # DEBUG: Check gradients
+            if batch_idx == 0 and epoch == 1:
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        grad_norm = param.grad.norm().item()
+                        print(f"  Gradient {name}: {grad_norm:.6f}")
+                        if grad_norm < 1e-6:
+                            print(f"    WARNING: Very small gradient!")
+
             
             count += 1
             step_count += 1
