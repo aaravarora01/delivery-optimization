@@ -159,7 +159,7 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     print("Generated visualization plots")
 
 class RouteZoneDataset(Dataset):
-    def __init__(self, df, routes, max_zone=80, min_stops=3, max_zones=None):
+    def __init__(self, df, routes, max_zone=80, min_stops=3):
         self.df = df
         self.routes = routes
         self.max_zone = max_zone
@@ -173,13 +173,6 @@ class RouteZoneDataset(Dataset):
             for z in route_zones:
                 if len(z) >= min_stops:
                     self.zones.append(z)
-                    
-                    # Stop if we've reached the limit
-                    if max_zones is not None and len(self.zones) >= max_zones:
-                        break
-            # Break outer loop if limit reached
-            if max_zones is not None and len(self.zones) >= max_zones:
-                break
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -269,7 +262,7 @@ def main():
     print(f"Split: {len(train_routes)} training routes, {len(val_routes)} validation routes")
     
     # Create datasets
-    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3, max_zones=args.max_zones)
+    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3)
     val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3)
     
     print(f"Training zones: {len(train_dataset.zones)}, Validation zones: {len(val_dataset.zones)}")
@@ -383,9 +376,6 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
-            if batch_idx == 0:
-                print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
-            
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
@@ -405,36 +395,12 @@ def main():
             if target_idx.dim() < 2:
                 target_idx = target_idx.unsqueeze(0)
             
-            if batch_idx == 0:
-                print(f"After squeezing: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
-            
             # Features
             X = node_features(coords)
             
             if args.use_gnn:
                 adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
                 X = gnn(X, adj.to(args.device))
-                
-                # Ensure correct shape: should be (B, N, d_model)
-                if X.dim() == 2:
-                    # X is (N, d) - add batch dimension
-                    X = X.unsqueeze(0)
-                elif X.dim() == 3:
-                    # X is 3D, check if dimensions are correct
-                    if X.shape[0] == X.shape[1] and X.shape[0] != coords.shape[0]:
-                        # GNN output is (N, N, d) instead of (B, N, d) - extract diagonal
-                        N = X.shape[0]
-                        X = X[torch.arange(N), torch.arange(N), :]  # Extract diagonal: (N, d)
-                        X = X.unsqueeze(0)  # Add batch: (1, N, d)
-                    elif X.shape[0] != coords.shape[0]:
-                        # Batch size mismatch but not (N, N, d) case
-                        X = X[:coords.shape[0]]  # Take first B batches
-                
-                # Final check
-                expected_shape = (coords.shape[0], coords.shape[1], args.d_model)
-                if X.shape != expected_shape:
-                    raise ValueError(f"GNN output shape {X.shape} doesn't match expected {expected_shape}")
-                
                 del adj  # Free memory
             
             edge_feats = edge_bias_features(coords)
@@ -465,15 +431,6 @@ def main():
                 scaler.scale(loss_scaled).backward()
             else:
                 loss_scaled.backward()
-            # DEBUG: Check gradients
-            if batch_idx == 0 and epoch == 1:
-                for name, param in model.named_parameters():
-                    if param.grad is not None:
-                        grad_norm = param.grad.norm().item()
-                        print(f"  Gradient {name}: {grad_norm:.6f}")
-                        if grad_norm < 1e-6:
-                            print(f"    WARNING: Very small gradient!")
-
             
             count += 1
             step_count += 1
@@ -537,19 +494,10 @@ def main():
                     if isinstance(zone_df, dict):
                         zone_df = zone_df['zone']
                     
-                    # Debug: Print first zone's prediction
-                    if len(val_metrics) == 0:
-                        print(f"\nDEBUG: First validation zone - size: {len(zone_df)}")
-                        print(f"  True order (first 10): {zone_df.sort_values('seq')['stop_id'].tolist()[:10]}")
-                    
                     metrics = evaluate_zone_predictions(
                         model, gnn, zone_df, args.device, 
                         use_gnn=args.use_gnn, greedy=True
                     )
-                    
-                    if len(val_metrics) == 0:
-                        print(f"  Metrics: tau={metrics.get('kendall_tau', 0):.4f}, seq_acc={metrics.get('sequence_accuracy', 0):.4f}")
-                    
                     val_metrics.append(metrics)
                 except Exception as e:
                     print(f"Warning: Validation evaluation failed for zone: {e}")
