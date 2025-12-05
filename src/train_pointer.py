@@ -251,7 +251,7 @@ def train(args):
             gnn.eval()
         
         eval_metrics = []
-        for zone_df in dataset.zones[:min(10, len(dataset.zones))]:  # Evaluate on first 10 zones
+        for zone_df in dataset.zones:  # Evaluate on all zones
             try:
                 metrics = evaluate_zone_predictions(
                     model, gnn, zone_df, args.device,
