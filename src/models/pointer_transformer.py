@@ -131,9 +131,14 @@ class PointerTransformer(nn.Module):
         logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # (B, N)
 
         if self.edge_bias is not None and edge_feats is not None and last_node_idx is not None:
-            B = H.shape[0]  # Get B from H here, not as a parameter
+            B = H.shape[0]
             bias_full = self.edge_bias(edge_feats)  # (B, N, N)
             bias = bias_full[torch.arange(B, device=H.device), last_node_idx, :]  # (B, N)
+            
+            # DEBUG: Print once to verify edge bias is working
+            if t == 1 and torch.rand(1).item() < 0.01:
+                print(f"  Edge bias active: bias range [{bias.min():.3f}, {bias.max():.3f}]")
+            
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             logits = logits + bias
 
