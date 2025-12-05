@@ -117,39 +117,31 @@ class PointerTransformer(nn.Module):
         last_node_idx: (B,) indices of last selected node (for edge bias)
         Returns logits over N nodes for next pick.
         """
-        B, N, D = H.shape
         T = tgt.size(1)
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
         
         if self.training:
-            D_out = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
+            dec_out = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
         else:
-            D_out = self.decoder(tgt, H, tgt_mask=tgt_mask)
+            dec_out = self.decoder(tgt, H, tgt_mask=tgt_mask)
         
-        q = self.out_proj(D_out[:, -1])  # (B, D) last step
-        keys = self.ptr_proj(H)          # (B, N, D)
+        q = self.out_proj(dec_out[:, -1])  # (B, D) last step
+        keys = self.ptr_proj(H)            # (B, N, D)
 
         logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # (B, N)
-        
-        # Debug: verify shape
-        assert logits.shape == (B, N), f"Logits shape wrong: {logits.shape}, expected ({B}, {N})"
 
         if self.edge_bias is not None and edge_feats is not None and last_node_idx is not None:
-            # Get edge features FROM last selected node TO all nodes
+            B = H.shape[0]  # Get B from H here, not as a parameter
             bias_full = self.edge_bias(edge_feats)  # (B, N, N)
-            # Extract edges from last_node_idx to all other nodes
             bias = bias_full[torch.arange(B, device=H.device), last_node_idx, :]  # (B, N)
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             logits = logits + bias
-            
-            # Debug: verify shape after bias
-            assert logits.shape == (B, N), f"Logits shape wrong after bias: {logits.shape}, expected ({B}, {N})"
 
         # Clamp logits before masking
         logits = torch.clamp(logits, min=-50.0, max=50.0)
         logits = logits.masked_fill(mask_visited, -1e4)
 
-        return logits  # Must be (B, N)
+        return logits  # (B, N)
 
     def forward_teacher_forced(self, x, target_idx, edge_feats=None):
         """
