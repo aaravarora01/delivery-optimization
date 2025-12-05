@@ -142,7 +142,7 @@ class PointerTransformer(nn.Module):
 
         # Clamp logits before masking to prevent overflow
         logits = torch.clamp(logits, min=-50.0, max=50.0)
-        logits = logits.masked_fill(mask_visited, -1e9)
+        logits = logits.masked_fill(mask_visited, -1e4)
 
         return logits
 
