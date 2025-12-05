@@ -202,7 +202,8 @@ def train(args):
     for epoch in range(1, args.epochs + 1):
         epoch_losses = []
         
-        for batch_idx, (coords, target_idx) in enumerate(dataloader):
+        # Add progress bar for batches in this epoch
+        for batch_idx, (coords, target_idx) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
             
