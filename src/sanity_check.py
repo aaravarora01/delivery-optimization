@@ -216,6 +216,11 @@ def test_overfitting(args):
             # Forward pass
             loss = model.forward_teacher_forced(X, target_idx, edge_feats=edge_feats)
             
+            # DEBUG: Check loss value and gradients
+            if epoch == 1 and batch_idx == 0:
+                print(f"DEBUG: First batch loss = {loss.item():.6f}")
+                print(f"DEBUG: Loss is finite: {torch.isfinite(loss).item()}")
+            
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"Warning: Invalid loss at epoch {epoch}, batch {batch_idx}")
                 continue
@@ -223,8 +228,24 @@ def test_overfitting(args):
             # Backward pass
             opt.zero_grad()
             loss.backward()
+            
+            # DEBUG: Check gradients
+            if epoch == 1 and batch_idx == 0:
+                total_grad_norm = 0.0
+                for p in params:
+                    if p.grad is not None:
+                        total_grad_norm += p.grad.norm().item() ** 2
+                total_grad_norm = total_grad_norm ** 0.5
+                print(f"DEBUG: Gradient norm before clipping: {total_grad_norm:.6f}")
+            
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             opt.step()
+            
+            # DEBUG: Check if weights are updating
+            if epoch == 1 and batch_idx == 0:
+                # Check a sample weight
+                sample_param = list(model.parameters())[0]
+                print(f"DEBUG: Sample param value after step: {sample_param.data[0,0].item():.6f}")
             
             epoch_losses.append(loss.item())
         
