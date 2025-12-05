@@ -272,12 +272,37 @@ def test_overfitting(args):
     final_metrics = []
     for zone_df in dataset.zones:
         try:
+            # Get target indices for comparison
+            coords_check = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32).unsqueeze(0)
+            sid_to_pos = {sid:i for i,sid in enumerate(zone_df['stop_id'].tolist())}
+            true_order = [sid_to_pos[sid] for sid in zone_df.sort_values('seq')['stop_id'].tolist()]
+            target_indices = torch.tensor(true_order, dtype=torch.long).unsqueeze(0)  # (1,N)
+            
+            # Get predictions
+            coords_device = coords_check.to(args.device)
+            X = node_features(coords_device)
+            
+            if args.use_gnn:
+                adj = knn_adj(coords_device, k=min(8, coords_device.shape[1]-1))
+                X = gnn(X, adj.to(args.device))
+            
+            edge_feats = edge_bias_features(coords_device)
+            
+            with torch.no_grad():
+                pred_indices = model.greedy_decode(X, edge_feats=edge_feats)
+            
+            # Debug: Print predictions vs targets
+            print("pred:", pred_indices[0].cpu().tolist())
+            print("tgt:", target_indices[0].tolist())
+            
+            # Then evaluate normally
             metrics = evaluate_zone_predictions(
                 model, gnn, zone_df, args.device,
                 use_gnn=args.use_gnn, greedy=True
             )
             final_metrics.append(metrics)
         except Exception as e:
+            print(f"Error in final evaluation: {e}")
             continue
     
     if final_metrics:
