@@ -117,34 +117,39 @@ class PointerTransformer(nn.Module):
         last_node_idx: (B,) indices of last selected node (for edge bias)
         Returns logits over N nodes for next pick.
         """
-        # standard transformer decoding
+        B, N, D = H.shape
         T = tgt.size(1)
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
         
         if self.training:
-            D = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
+            D_out = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
         else:
-            D = self.decoder(tgt, H, tgt_mask=tgt_mask)
+            D_out = self.decoder(tgt, H, tgt_mask=tgt_mask)
         
-        q = self.out_proj(D[:, -1])  # (B,D) last step
-        keys = self.ptr_proj(H)      # (B,N,D)
+        q = self.out_proj(D_out[:, -1])  # (B, D) last step
+        keys = self.ptr_proj(H)          # (B, N, D)
 
-        logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))
+        logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # (B, N)
+        
+        # Debug: verify shape
+        assert logits.shape == (B, N), f"Logits shape wrong: {logits.shape}, expected ({B}, {N})"
 
         if self.edge_bias is not None and edge_feats is not None and last_node_idx is not None:
             # Get edge features FROM last selected node TO all nodes
-            B = edge_feats.shape[0]
-            bias = self.edge_bias(edge_feats)  # (B,N,N)
+            bias_full = self.edge_bias(edge_feats)  # (B, N, N)
             # Extract edges from last_node_idx to all other nodes
-            bias = bias[torch.arange(B), last_node_idx, :]  # (B,N)
+            bias = bias_full[torch.arange(B, device=H.device), last_node_idx, :]  # (B, N)
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             logits = logits + bias
+            
+            # Debug: verify shape after bias
+            assert logits.shape == (B, N), f"Logits shape wrong after bias: {logits.shape}, expected ({B}, {N})"
 
-        # Clamp logits before masking to prevent overflow
+        # Clamp logits before masking
         logits = torch.clamp(logits, min=-50.0, max=50.0)
         logits = logits.masked_fill(mask_visited, -1e4)
 
-        return logits
+        return logits  # Must be (B, N)
 
     def forward_teacher_forced(self, x, target_idx, edge_feats=None):
         """
@@ -168,18 +173,29 @@ class PointerTransformer(nn.Module):
         valid_steps = 0
         last_node_idx = None  # No previous node for first step
 
+        # Debug prints
+        if torch.rand(1).item() < 0.01:  # Print 1% of the time
+            print(f"DEBUG: B={B}, N={N}")
+            print(f"DEBUG: target_idx shape: {target_idx.shape}, range: [{target_idx.min()}, {target_idx.max()}]")
+
         for t in range(N):
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats, last_node_idx=last_node_idx)
             
-            y = target_idx[:, t]
+            # Verify shapes
+            assert logits.shape == (B, N), f"Logits shape: {logits.shape}, expected ({B}, {N})"
             
-            # Simple cross-entropy loss (remove label smoothing for now)
+            y = target_idx[:, t]  # (B,)
+            assert y.shape == (B,), f"Target shape: {y.shape}, expected ({B},)"
+            
+            # Simple cross-entropy loss
             step_loss = F.cross_entropy(logits, y, reduction='mean')
             
             # Skip if loss is invalid
             if torch.isfinite(step_loss):
                 loss += step_loss
                 valid_steps += 1
+            else:
+                print(f"Warning: Invalid loss at step {t}: {step_loss.item()}")
 
             chosen = y
             mask_visited = mask_visited.scatter(1, chosen.unsqueeze(1), True)
@@ -192,7 +208,13 @@ class PointerTransformer(nn.Module):
         if valid_steps == 0:
             return torch.tensor(1e6, device=device, requires_grad=True)
         
-        return loss / valid_steps
+        avg_loss = loss / valid_steps
+        
+        # Debug: print loss occasionally
+        if torch.rand(1).item() < 0.01:
+            print(f"DEBUG: Avg loss: {avg_loss.item():.4f}, valid_steps: {valid_steps}/{N}")
+        
+        return avg_loss
 
     @torch.no_grad()
 
