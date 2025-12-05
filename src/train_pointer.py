@@ -503,10 +503,23 @@ def main():
             
             for zone_df in val_zones_sample:
                 try:
+                    # Extract zone DataFrame from dict if needed
+                    if isinstance(zone_df, dict):
+                        zone_df = zone_df['zone']
+                    
+                    # Debug: Print first zone's prediction
+                    if len(val_metrics) == 0:
+                        print(f"\nDEBUG: First validation zone - size: {len(zone_df)}")
+                        print(f"  True order (first 10): {zone_df.sort_values('seq')['stop_id'].tolist()[:10]}")
+                    
                     metrics = evaluate_zone_predictions(
                         model, gnn, zone_df, args.device, 
                         use_gnn=args.use_gnn, greedy=True
                     )
+                    
+                    if len(val_metrics) == 0:
+                        print(f"  Metrics: tau={metrics.get('kendall_tau', 0):.4f}, seq_acc={metrics.get('sequence_accuracy', 0):.4f}")
+                    
                     val_metrics.append(metrics)
                 except Exception as e:
                     print(f"Warning: Validation evaluation failed for zone: {e}")

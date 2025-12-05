@@ -114,7 +114,9 @@ def evaluate_zone_predictions(
     
     # Get features
     X = node_features(coords)
+    print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
+        # Ensure coords is 3D for knn_adj
         coords_3d = coords
         while coords_3d.dim() < 3:
             coords_3d = coords_3d.unsqueeze(0)
@@ -123,36 +125,21 @@ def evaluate_zone_predictions(
             
         adj = knn_adj(coords_3d, k=min(8, coords_3d.shape[1]-1))
         
+        # Ensure adj has batch dimension
         if adj.dim() == 2:
-            adj = adj.unsqueeze(0)
+            adj = adj.unsqueeze(0)  # (N, N) -> (1, N, N)
         
-        # Ensure X has batch dimension before GNN
+        # Ensure X has batch dimension for GNN
         if X.dim() == 2:
             X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
         
-        # Apply GNN
-        X_gnn = gnn(X, adj.to(device))
+        X = gnn(X, adj.to(device))
         
-        # CRITICAL: Ensure GNN output maintains correct shape (1, N, d_model)
-        # GNN should output (B, N, d_model) but might output (N, N, d_model) or (N, d_model)
-        if X_gnn.dim() == 2:
-            # (N, d) -> (1, N, d)
-            X_gnn = X_gnn.unsqueeze(0)
-        elif X_gnn.dim() == 3:
-            if X_gnn.shape[0] != X.shape[0]:
-                # If batch dimension is wrong, check if it's (N, N, d) instead of (1, N, d)
-                if X_gnn.shape[0] == X_gnn.shape[1]:
-                    # Shape is (N, N, d) - take first row and add batch dim
-                    X_gnn = X_gnn[0:1, :, :]  # Take first N nodes, add batch dim
-                else:
-                    # Unexpected shape, try to fix
-                    X_gnn = X_gnn[:1]  # Take first batch
-        
-        # Final check: X should be (1, N, d_model) where N matches coords
-        if X_gnn.shape[0] != 1 or X_gnn.shape[1] != coords.shape[1]:
-            raise ValueError(f"GNN output shape mismatch: got {X_gnn.shape}, expected (1, {coords.shape[1]}, d_model)")
-        
-        X = X_gnn
+        # Ensure X is still 3D after GNN
+        if X.dim() == 2:
+            X = X.unsqueeze(0)
+            
+        print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
     
@@ -175,6 +162,14 @@ def evaluate_zone_predictions(
     invalid_indices = [i for i in pred_order_indices if i < 0 or i >= num_stops]
     if invalid_indices:
         raise ValueError(f"Invalid indices in prediction: {invalid_indices[:5]}... (zone size: {num_stops})")
+    
+    # CRITICAL CHECK: Verify all nodes are visited exactly once
+    unique_indices = set(pred_order_indices)
+    if len(unique_indices) != num_stops:
+        # Model predicted duplicate indices or missed some nodes
+        missing = set(range(num_stops)) - unique_indices
+        duplicates = [idx for idx in pred_order_indices if pred_order_indices.count(idx) > 1]
+        raise ValueError(f"Invalid prediction: missing indices {list(missing)[:5]}, duplicates {list(set(duplicates))[:5]}")
     
     # Get stop_ids in predicted and true order
     stop_ids = zone_df['stop_id'].tolist()
