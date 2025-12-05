@@ -208,6 +208,7 @@ def main():
     # Data args
     ap.add_argument("--max_zone", type=int, default=60, help="Maximum zone size (reduced for memory)")
     ap.add_argument("--max_routes", type=int, default=None, help="Limit number of routes (None = use all training data)")
+    ap.add_argument("--max_zones", type=int, default=None, help="Limit number of zones in training dataset (None = use all)")
     ap.add_argument("--val_split", type=float, default=0.1, help="Fraction of routes to use for validation")
     ap.add_argument("--val_eval_freq", type=int, default=1, help="Evaluate validation every N epochs")
     ap.add_argument("--val_num_zones", type=int, default=50, help="Number of zones to evaluate during validation")
