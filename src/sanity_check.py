@@ -773,7 +773,7 @@ def main():
     
     # Overfitting test args
     parser.add_argument("--num_routes", type=int, default=1, help="Number of routes for overfitting test")
-    parser.add_argument("--epochs", type=int, default=25, help="Number of epochs for overfitting test")
+    parser.add_argument("--epochs", type=int, default=40, help="Number of epochs for overfitting test")
     
     # Model args
     parser.add_argument("--use_gnn", action="store_true")
