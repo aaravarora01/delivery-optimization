@@ -414,6 +414,14 @@ def main():
             if args.use_gnn:
                 adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
                 X = gnn(X, adj.to(args.device))
+                
+                # Ensure correct shape: should be (B, N, d_model)
+                if X.dim() == 2:
+                    X = X.unsqueeze(0)
+                elif X.shape[0] != coords.shape[0]:
+                    # Batch dimension is wrong - reshape
+                    X = X.view(coords.shape[0], coords.shape[1], -1)
+                
                 del adj  # Free memory
             
             edge_feats = edge_bias_features(coords)
