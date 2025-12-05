@@ -54,57 +54,57 @@ def build_zones(df_route, max_zone=80, seed=0):
     
     return zones
 
-    def run_validation_zone(model, gnn, zone_df, device, use_gnn):
-        # Build coords + target exactly like training
-        coords, target_idx = collate_zone(zone_df)       # (1,N,2), (1,N)
+def run_validation_zone(model, gnn, zone_df, device, use_gnn):
+    # Build coords + target exactly like training
+    coords, target_idx = collate_zone(zone_df)       # (1,N,2), (1,N)
 
-        # Move to device
-        coords = coords.to(device)
-        target_idx = target_idx.to(device)
+    # Move to device
+    coords = coords.to(device)
+    target_idx = target_idx.to(device)
 
-        # Ensure correct shapes
-        while coords.dim() > 3:
-            coords = coords.squeeze(0)
-        if coords.dim() < 3:
-            coords = coords.unsqueeze(0)
+    # Ensure correct shapes
+    while coords.dim() > 3:
+        coords = coords.squeeze(0)
+    if coords.dim() < 3:
+        coords = coords.unsqueeze(0)
 
-        while target_idx.dim() > 2:
-            target_idx = target_idx.squeeze(0)
-        if target_idx.dim() < 2:
-            target_idx = target_idx.unsqueeze(0)
+    while target_idx.dim() > 2:
+        target_idx = target_idx.squeeze(0)
+    if target_idx.dim() < 2:
+        target_idx = target_idx.unsqueeze(0)
 
-        # Compute node features identically to training
-        X = node_features(coords)
+    # Compute node features identically to training
+    X = node_features(coords)
 
-        # GNN (same as training)
-        if use_gnn and gnn is not None:
-            adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
-            X = gnn(X, adj.to(device))
-            del adj
+    # GNN (same as training)
+    if use_gnn and gnn is not None:
+        adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
+        X = gnn(X, adj.to(device))
+        del adj
 
-        # Edge features (must match training!)
-        edge_feats = edge_bias_features(coords)
+    # Edge features (must match training!)
+    edge_feats = edge_bias_features(coords)
 
-        # -------- Run greedy decoding exactly like training --------
-        model.eval()
-        with torch.no_grad():
-            seq, length = model.greedy_decode(
-                X, edge_feats=edge_feats
-            )
+    # -------- Run greedy decoding exactly like training --------
+    model.eval()
+    with torch.no_grad():
+        seq, length = model.greedy_decode(
+            X, edge_feats=edge_feats
+        )
 
-        # Convert predictions into numpy list
-        pred_order = seq.squeeze(0).cpu().tolist()
+    # Convert predictions into numpy list
+    pred_order = seq.squeeze(0).cpu().tolist()
 
-        # Compute metrics using the same ground truth ordering
-        true_order = target_idx.squeeze(0).cpu().tolist()
+    # Compute metrics using the same ground truth ordering
+    true_order = target_idx.squeeze(0).cpu().tolist()
 
-        return {
-            "kendall_tau": float("nan") if len(true_order) <= 1 else
-                kendall_tau(pred_order, true_order),
-            "sequence_accuracy": float(pred_order == true_order),
-            "distance_ratio": 1.0,   # optional — compute if needed
-            "position_acc_k1": float(pred_order[0] == true_order[0]),
-        }
+    return {
+        "kendall_tau": float("nan") if len(true_order) <= 1 else
+            kendall_tau(pred_order, true_order),
+        "sequence_accuracy": float(pred_order == true_order),
+        "distance_ratio": 1.0,   # optional — compute if needed
+        "position_acc_k1": float(pred_order[0] == true_order[0]),
+    }
 
 def collate_zone(zone_df):
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32).unsqueeze(0)  # (1,N,2)
