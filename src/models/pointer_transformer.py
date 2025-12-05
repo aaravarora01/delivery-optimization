@@ -131,24 +131,34 @@ class PointerTransformer(nn.Module):
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
+        assert torch.isfinite(D).all(), "NaN/inf in decoder output D"
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
+        assert torch.isfinite(q).all(), "NaN/inf in query q"
 
         keys = self.ptr_proj(H)      # (B,N,D)
+        assert torch.isfinite(keys).all(), "NaN/inf in keys"
 
         logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # pointer scores
+        assert torch.isfinite(logits).all(), "NaN/inf in logits after einsum"
 
         if self.edge_bias is not None and edge_feats is not None:
+
+            # Check edge_feats for NaN/inf
+            assert torch.isfinite(edge_feats).all(), "NaN/inf in edge_feats"
 
             # Use last chosen index to index edge_feats for bias against candidates
 
             # We approximate with a pooled bias: bias_i = mean_j(bias_ij) to stay cheap
 
             bias = self.edge_bias(edge_feats)  # (B,N,N)
+            assert torch.isfinite(bias).all(), "NaN/inf in edge_bias output"
 
             bias = bias.mean(dim=1)            # (B,N)
+            assert torch.isfinite(bias).all(), "NaN/inf in bias after mean"
 
             logits = logits + bias
+            assert torch.isfinite(logits).all(), "NaN/inf in logits after adding bias"
 
         logits = logits.masked_fill(mask_visited, float("-inf"))
 

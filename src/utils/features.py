@@ -83,9 +83,13 @@ def edge_bias_features(coords):
     dist = torch.sqrt((111.0*dlat)**2 + (111.0*torch.cos(lat)*dlon)**2)  # km approx
     dist = torch.clamp(dist, min=1e-6)  # Prevent division by zero when stops have identical coordinates
 
-    theta = torch.atan2(dlat, dlon+1e-9)
+    # Clamp dlon to prevent atan2 issues with very small values
+    dlon_clamped = torch.clamp(dlon, min=-1e6, max=1e6)
+    theta = torch.atan2(dlat, dlon_clamped + 1e-9)
 
     dtheta = theta - theta.transpose(1,2)
+    # Clamp dtheta to prevent extreme values
+    dtheta = torch.clamp(dtheta, min=-math.pi, max=math.pi)
 
     same = torch.zeros((B,N,N), device=coords.device)  # placeholder; can be filled if street data exists
 
