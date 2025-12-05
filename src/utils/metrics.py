@@ -134,30 +134,21 @@ def evaluate_zone_predictions(
             X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
         
         X = gnn(X, adj.to(device))
-        
-        # CRITICAL FIX: GNN outputs (N, N, 256) but we need (1, N, 256)
-        if X.dim() == 3:
-            if X.shape[0] == X.shape[1]:
-                # GNN output is (N, N, d) - extract node features (diagonal)
-                N = X.shape[0]
-                X = X[torch.arange(N), torch.arange(N), :]  # (N, N, d) -> (N, d)
-                X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
-            elif X.shape[0] != 1:
-                # X is (B, N, d) where B != 1 - take first batch
-                X = X[:1]
-        elif X.dim() == 2:
+
+        # GNN should output (B, N, d_model)
+        # Ensure X has correct shape: (1, N, d_model)
+        if X.dim() == 2:
             # X is (N, d) - add batch dimension
             X = X.unsqueeze(0)
-        elif X.dim() == 4:
-            # GNN output is (1, N, N, d) - extract node features
-            N = X.shape[1]
-            X = X[0, torch.arange(N), torch.arange(N), :]  # (1, N, N, d) -> (N, d)
-            X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
-        
-        # Final verification - X must be (1, N, d)
-        if X.dim() != 3 or X.shape[0] != 1 or X.shape[1] != coords.shape[1]:
-            raise ValueError(f"GNN output shape error: got {X.shape}, expected (1, {coords.shape[1]}, d_model)")
-            
+        elif X.dim() == 3:
+            # X is (B, N, d) - ensure B=1
+            if X.shape[0] != 1:
+                X = X[:1]  # Take first batch if multiple
+
+        # Final verification
+        if X.dim() != 3 or X.shape[0] != 1:
+            raise ValueError(f"GNN output shape error: got {X.shape}, expected (1, N, d_model)")
+
         print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
