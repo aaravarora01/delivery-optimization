@@ -47,7 +47,7 @@ class RelEdgeBias(nn.Module):
         out = self.net(edge_feats).view(B, N, N)  # bias_ij
         
         # Clamp bias output to reasonable range to prevent extreme values
-        out = torch.clamp(out, min=-10.0, max=10.0)
+        out = torch.clamp(out, min=-5.0, max=5.0)
         
         # Replace any NaN/inf with zeros as fallback
         out = torch.where(torch.isfinite(out), out, torch.zeros_like(out))
@@ -102,9 +102,6 @@ class PointerTransformer(nn.Module):
 
         self.edge_bias = RelEdgeBias() if cfg.use_edge_bias else None
         
-        # LayerNorm for stabilizing embeddings
-        self.embed_norm = nn.LayerNorm(cfg.d_model)
-        
         # Initialize weights properly
         self._init_weights()
     
@@ -152,34 +149,26 @@ class PointerTransformer(nn.Module):
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
-        D = torch.clamp(D, min=-100.0, max=100.0)
 
         q = self.out_proj(D[:, -1])  # (B,D) last step
-        q = torch.clamp(q, min=-10.0, max=10.0)
-        
-        # Normalize query to prevent extreme values
-        q_norm = torch.norm(q, dim=-1, keepdim=True) + 1e-8
-        q = q / q_norm
-
         keys = self.ptr_proj(H)      # (B,N,D)
-        keys = torch.clamp(keys, min=-10.0, max=10.0)
-        
-        # Normalize keys to prevent extreme values
-        keys_norm = torch.norm(keys, dim=-1, keepdim=True) + 1e-8
-        keys = keys / keys_norm
 
-        scale = math.sqrt(keys.size(-1)) + 1e-8
+        # Standard scaled dot-product attention WITHOUT aggressive normalization
+        scale = math.sqrt(keys.size(-1))
         logits = torch.einsum("bd,bnd->bn", q, keys) / scale  # pointer scores
-        logits = torch.clamp(logits, min=-50.0, max=50.0)
 
+        # Add edge bias with MUCH smaller scale
         if self.edge_bias is not None and edge_feats is not None:
             bias = self.edge_bias(edge_feats)  # (B,N,N)
             bias = bias.mean(dim=1)            # (B,N)
-            bias = torch.clamp(bias, min=-10.0, max=10.0)
-            logits = logits + bias
+            # Scale down the bias to not overwhelm pointer scores
+            bias = torch.clamp(bias, min=-2.0, max=2.0)  # Reduced from ±10
+            logits = logits + 0.1 * bias  # Scale down by 0.1
 
+        # Mask visited nodes
         logits = logits.masked_fill(mask_visited, float(-1e9))
 
+        # Handle edge case where all nodes are masked
         all_masked = mask_visited.all(dim=1)
         if all_masked.any():
             logits = logits.masked_fill(all_masked.unsqueeze(1), 0.0)
@@ -208,7 +197,6 @@ class PointerTransformer(nn.Module):
             chosen = y  # teacher forcing
             mask_visited = mask_visited.scatter(1, chosen.unsqueeze(1), True)
             next_embed = H[torch.arange(B, device=device), chosen]  # (B,D)
-            next_embed = self.embed_norm(next_embed)  # (B,D)
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
 
         return loss / N
@@ -244,9 +232,6 @@ class PointerTransformer(nn.Module):
             mask_visited = mask_visited.scatter(1, choice.unsqueeze(1), True)
 
             next_embed = H[torch.arange(B, device=device), choice]
-            
-            # Normalize embedding to prevent extreme values from propagating
-            next_embed = self.embed_norm(next_embed)  # (B,D)
 
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
 
