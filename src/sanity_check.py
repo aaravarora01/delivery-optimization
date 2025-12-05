@@ -245,7 +245,7 @@ def test_overfitting(args):
             if epoch == 1 and batch_idx == 0:
                 # Check a sample weight
                 sample_param = list(model.parameters())[0]
-                print(f"DEBUG: Sample param value after step: {sample_param.data[0,0].item():.6f}")
+                print(f"DEBUG: Sample param value after step: {sample_param.data.flatten()[0].item():.6f}")
             
             epoch_losses.append(loss.item())
         

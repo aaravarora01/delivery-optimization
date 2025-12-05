@@ -81,22 +81,25 @@ def edge_bias_features(coords):
     # Haversine small-angle approx for bias; exact not necessary
 
     dist = torch.sqrt((111.0*dlat)**2 + (111.0*torch.cos(lat)*dlon)**2)  # km approx
-    dist = torch.clamp(dist, min=1e-6)  # Prevent division by zero when stops have identical coordinates
+    dist = torch.clamp(dist, min=1e-6)  # Prevent division by zero
+    
+    # NORMALIZE distance to reasonable scale (0-1 range for typical routes)
+    # Typical delivery route span: 1-20 km, we'll use 10 km as reference
+    dist_normalized = dist / 10.0  # Now most values are 0-2, with outliers up to 100
+    dist_normalized = torch.clamp(dist_normalized, max=10.0)  # Cap extreme outliers
 
     # Clamp dlon to prevent atan2 issues with very small values
     dlon_clamped = torch.clamp(dlon, min=-1e6, max=1e6)
     theta = torch.atan2(dlat, dlon_clamped + 1e-9)
 
     dtheta = theta - theta.transpose(1,2)
-    # Clamp dtheta to prevent extreme values
-    dtheta = torch.clamp(dtheta, min=-math.pi, max=math.pi)
+    # Normalize dtheta to -1 to 1 range
+    dtheta_normalized = dtheta / math.pi
 
-    same = torch.zeros((B,N,N), device=coords.device)  # placeholder; can be filled if street data exists
+    same = torch.zeros((B,N,N), device=coords.device)  # placeholder
 
-    edge_feats = torch.stack([dist, dtheta, same], dim=-1)
-    
-    # Final clipping for numerical stability - prevent extreme values
-    edge_feats = torch.clamp(edge_feats, min=-1e3, max=1e3)
+    # Use NORMALIZED features
+    edge_feats = torch.stack([dist_normalized, dtheta_normalized, same], dim=-1)
     
     return edge_feats
 
