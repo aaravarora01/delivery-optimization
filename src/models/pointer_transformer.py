@@ -150,6 +150,12 @@ class PointerTransformer(nn.Module):
         """
         B, N, _ = x.shape
         device = x.device
+        # DEBUG PRINTS
+        print(f"forward_teacher_forced called:")
+        print(f"  x.shape: {x.shape}")
+        print(f"  target_idx.shape: {target_idx.shape}")
+        print(f"  edge_feats.shape: {edge_feats.shape if edge_feats is not None else None}")
+        print(f"  B={B}, N={N}")
 
         # Check input features
         if torch.isnan(x).any() or torch.isinf(x).any():
