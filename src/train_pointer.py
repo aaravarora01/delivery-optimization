@@ -360,16 +360,16 @@ def main():
     # Training args
     parser.add_argument("--num_routes", type=int, default=1000, help="Number of routes to use for training")
     parser.add_argument("--epochs", type=int, default=40, help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
     
     # Model args
     parser.add_argument("--use_gnn", action="store_true", help="Use Graph Neural Network")
-    parser.add_argument("--d_model", type=int, default=128, help="Model dimension")
-    parser.add_argument("--nhead", type=int, default=4, help="Number of attention heads")
-    parser.add_argument("--d_ff", type=int, default=256, help="Feedforward dimension")
-    parser.add_argument("--nlayers_enc", type=int, default=2, help="Number of encoder layers")
-    parser.add_argument("--nlayers_dec", type=int, default=2, help="Number of decoder layers")
+    parser.add_argument("--d_model", type=int, default=256, help="Model dimension")
+    parser.add_argument("--nhead", type=int, default=8, help="Number of attention heads")
+    parser.add_argument("--d_ff", type=int, default=512, help="Feedforward dimension")
+    parser.add_argument("--nlayers_enc", type=int, default=4, help="Number of encoder layers")
+    parser.add_argument("--nlayers_dec", type=int, default=4, help="Number of decoder layers")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
     
     # Data args
