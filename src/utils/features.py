@@ -81,6 +81,7 @@ def edge_bias_features(coords):
     # Haversine small-angle approx for bias; exact not necessary
 
     dist = torch.sqrt((111.0*dlat)**2 + (111.0*torch.cos(lat)*dlon)**2)  # km approx
+    dist = torch.clamp(dist, min=1e-6)  # Prevent division by zero when stops have identical coordinates
 
     theta = torch.atan2(dlat, dlon+1e-9)
 

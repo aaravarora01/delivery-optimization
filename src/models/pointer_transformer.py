@@ -152,6 +152,14 @@ class PointerTransformer(nn.Module):
 
         logits = logits.masked_fill(mask_visited, float("-inf"))
 
+        # Check if all logits are masked (all -inf) - this would cause NaN in softmax/log_softmax
+        # This shouldn't happen in normal operation, but handle gracefully to prevent NaN
+        all_masked = mask_visited.all(dim=1)  # (B,) - True if all nodes visited for this batch
+        if all_masked.any():
+            # If all nodes are visited, we shouldn't be decoding. Set all logits to 0 as fallback
+            # This prevents NaN but indicates a logic error upstream
+            logits = logits.masked_fill(all_masked.unsqueeze(1), 0.0)
+
         return logits
 
     def forward_teacher_forced(self, x, target_idx, edge_feats=None):
@@ -168,7 +176,13 @@ class PointerTransformer(nn.Module):
 
         device = x.device
 
+        # Check inputs for NaN/inf
+        assert torch.isfinite(x).all(), "NaN/inf in node features"
+        if edge_feats is not None:
+            assert torch.isfinite(edge_feats).all(), "NaN/inf in edge_feats"
+
         H = self.encode(x)
+        assert torch.isfinite(H).all(), "NaN/inf in encoder output"
 
         # Start token
 
@@ -181,15 +195,13 @@ class PointerTransformer(nn.Module):
         for t in range(N):
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
+            assert torch.isfinite(logits).all(), f"NaN/inf in logits at step {t}"
 
             y = target_idx[:, t]  # (B,)
 
-            loss += F.cross_entropy(logits, y, label_smoothing=0.05)
-
-            # Check for invalid logits
-            if torch.isnan(logits).any() or torch.isinf(logits).any():
-                print(f"Warning: Invalid logits detected at step {t} with {N} nodes. Skipping.")
-                pass
+            step_loss = F.cross_entropy(logits, y, label_smoothing=0.05)
+            assert torch.isfinite(step_loss).all(), f"NaN/inf in loss at step {t}"
+            loss += step_loss
 
             # append teacher token embedding: take the chosen node embedding as next query
 
@@ -220,6 +232,10 @@ class PointerTransformer(nn.Module):
         seq = []
 
         for _ in range(N):
+
+            # Check if all nodes are already visited (shouldn't happen, but prevent infinite loop)
+            if mask_visited.all():
+                break
 
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
 

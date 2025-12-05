@@ -34,7 +34,18 @@ def beam_search_pointer(model, x, edge_feats=None, beam_size=4):
 
         for (tgt, mv, seq, logp) in beams:
 
+            # Check if all nodes are already visited (shouldn't happen, but prevent issues)
+            if mv.all():
+                continue
+
             logits = model.decode_step(H, tgt, mv, edge_feats=edge_feats)
+
+            # Check if all logits are -inf before log_softmax (would cause NaN)
+            # This can happen if all nodes are masked
+            all_inf = torch.isinf(logits) & (logits < 0)  # Check for -inf
+            if all_inf.all(dim=1).any():
+                # Skip this beam if all logits are -inf (shouldn't happen with decode_step fix, but defensive)
+                continue
 
             logprobs = torch.log_softmax(logits, dim=1)  # (B,N)
 
