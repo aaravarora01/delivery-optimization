@@ -166,6 +166,42 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     plt.savefig(output_dir / 'combined_training_curves.png', dpi=300, bbox_inches='tight')
     plt.close()
     
+    # Plot 5: Loss and Kendall Tau Combined (NEW)
+    if training_metrics['val_kendall_tau_mean']:
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        
+        # Plot loss on left y-axis
+        ax1.plot(epochs, training_metrics['train_loss'], 'b-', linewidth=2, label='Training Loss')
+        ax1.set_xlabel('Epoch', fontsize=12)
+        ax1.set_ylabel('Loss', color='b', fontsize=12)
+        ax1.tick_params(axis='y', labelcolor='b')
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot Kendall tau on right y-axis
+        val_epochs = epochs[::val_eval_freq]
+        if len(val_epochs) > len(training_metrics['val_kendall_tau_mean']):
+            val_epochs = val_epochs[:len(training_metrics['val_kendall_tau_mean'])]
+        elif len(val_epochs) < len(training_metrics['val_kendall_tau_mean']):
+            val_epochs = epochs[:len(training_metrics['val_kendall_tau_mean'])]
+        
+        ax2 = ax1.twinx()
+        ax2.plot(val_epochs, training_metrics['val_kendall_tau_mean'], 'r-o', linewidth=2, 
+                markersize=6, label='Kendall τ')
+        ax2.set_ylabel('Kendall τ', color='r', fontsize=12)
+        ax2.tick_params(axis='y', labelcolor='r')
+        ax2.set_ylim([0, 1.0])
+        
+        ax1.set_title('Training Loss and Validation Kendall τ', fontsize=14, fontweight='bold')
+        
+        # Add legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        
+        fig.tight_layout()
+        plt.savefig(output_dir / 'loss_and_kendall_tau.png', dpi=300, bbox_inches='tight')
+        plt.close()
+    
     print("Generated visualization plots")
 
 class RouteZoneDataset(Dataset):

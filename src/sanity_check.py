@@ -17,6 +17,16 @@ from tqdm import tqdm
 
 from sklearn.cluster import KMeans
 
+# Try importing matplotlib for plotting
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+    print("Warning: matplotlib not available. Plots will be skipped.")
+
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -27,8 +37,6 @@ from utils.knn_graph import knn_adj
 from utils.features import node_features, edge_bias_features
 from utils.metrics import evaluate_zone_predictions, aggregate_metrics
 from baseline import kendall_tau
-
-import torch.nn.functional as F
 
 
 def build_zones(df_route, max_zone=80, seed=0):
@@ -52,15 +60,11 @@ def build_zones(df_route, max_zone=80, seed=0):
 
 def collate_zone(zone_df):
     """Collate a zone into tensors for training."""
-    # CRITICAL: Ensure zone_df is in encoder order
-    zone_df = zone_df.reset_index(drop=True).copy()
-    
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32).unsqueeze(0)  # (1,N,2)
     
-    # target index by true seq - map to encoder order
-    sid_to_pos = {sid: i for i, sid in enumerate(zone_df['stop_id'].tolist())}
-    true_sequence_stop_ids = zone_df.sort_values('seq')['stop_id'].tolist()
-    true_order = [sid_to_pos[sid] for sid in true_sequence_stop_ids]
+    # target index by true seq
+    sid_to_pos = {sid:i for i,sid in enumerate(zone_df['stop_id'].tolist())}
+    true_order = [sid_to_pos[sid] for sid in zone_df.sort_values('seq')['stop_id'].tolist()]
     target_idx = torch.tensor(true_order, dtype=torch.long).unsqueeze(0)  # (1,N)
     
     return coords, target_idx, zone_df
@@ -191,6 +195,7 @@ def test_overfitting(args):
     
     losses = []
     kendall_taus = []
+    eval_epochs = []  # Track which epochs we evaluated at
     
     for epoch in range(1, args.epochs + 1):
         epoch_losses = []
@@ -259,6 +264,7 @@ def test_overfitting(args):
                 agg_metrics = aggregate_metrics(eval_metrics)
                 tau = agg_metrics.get('kendall_tau_mean', 0.0)
                 kendall_taus.append(tau)
+                eval_epochs.append(epoch)  # Track which epoch this corresponds to
                 
                 print(f"Epoch {epoch:3d}/{args.epochs}: Loss={avg_loss:.6f}, Kendall τ={tau:.4f}")
             else:
@@ -317,6 +323,35 @@ def test_overfitting(args):
             if final_tau <= 0.95:
                 print(f"  - Kendall τ too low: {final_tau:.4f} <= 0.95 (expected > 0.95)")
                 print(f"    τ should approach 1.0 when model learns correct ordering")
+        
+        # Generate plot
+        if HAS_MATPLOTLIB and len(losses) > 0:
+            fig, ax1 = plt.subplots(figsize=(10, 6))
+            
+            # Plot loss on left y-axis
+            epochs_all = list(range(1, len(losses) + 1))
+            ax1.plot(epochs_all, losses, 'b-', label='Loss', linewidth=2)
+            ax1.set_xlabel('Epoch', fontsize=12)
+            ax1.set_ylabel('Loss', color='b', fontsize=12)
+            ax1.tick_params(axis='y', labelcolor='b')
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot Kendall tau on right y-axis
+            if len(kendall_taus) > 0 and len(eval_epochs) > 0:
+                ax2 = ax1.twinx()
+                ax2.plot(eval_epochs, kendall_taus, 'r-o', label='Kendall τ', linewidth=2, markersize=6)
+                ax2.set_ylabel('Kendall τ', color='r', fontsize=12)
+                ax2.tick_params(axis='y', labelcolor='r')
+                ax2.set_ylim([0, 1.0])
+            
+            ax1.set_title('Overfitting Test: Loss and Kendall τ vs Epochs', fontsize=14, fontweight='bold')
+            fig.tight_layout()
+            
+            # Save plot
+            plot_path = Path('overfitting_test_plot.png')
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"\nSaved plot to {plot_path}")
         
         return passed
     else:
