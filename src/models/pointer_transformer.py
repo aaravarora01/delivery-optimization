@@ -108,63 +108,50 @@ class PointerTransformer(nn.Module):
 
         return H
 
-    def decode_step(self, H, tgt, mask_visited, edge_feats=None):
-
+    def decode_step(self, H, tgt, mask_visited, edge_feats=None, last_node_idx=None):
         """
-
         H: (B,N,D) encoder outputs
-
         tgt: (B,t,D) decoded tokens so far (queries)
-
         mask_visited: (B,N) bool mask for nodes already chosen
-
         edge_feats: (B,N,N,3) for optional attention bias
-
+        last_node_idx: (B,) indices of last selected node (for edge bias)
         Returns logits over N nodes for next pick.
-
         """
-
         # standard transformer decoding
-
         T = tgt.size(1)
-
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
-
+        
         if self.training:
             D = checkpoint.checkpoint(self.decoder, tgt, H, tgt_mask)
         else:
             D = self.decoder(tgt, H, tgt_mask=tgt_mask)
         
         q = self.out_proj(D[:, -1])  # (B,D) last step
-        
         keys = self.ptr_proj(H)      # (B,N,D)
 
-        logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # pointer scores
+        logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))
 
-        if self.edge_bias is not None and edge_feats is not None:
+        if self.edge_bias is not None and edge_feats is not None and last_node_idx is not None:
+            # Get edge features FROM last selected node TO all nodes
+            B = edge_feats.shape[0]
             bias = self.edge_bias(edge_feats)  # (B,N,N)
-            bias = bias.mean(dim=1)            # (B,N)
+            # Extract edges from last_node_idx to all other nodes
+            bias = bias[torch.arange(B), last_node_idx, :]  # (B,N)
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             logits = logits + bias
 
         # Clamp logits before masking to prevent overflow
         logits = torch.clamp(logits, min=-50.0, max=50.0)
-        logits = logits.masked_fill(mask_visited, -1e4)  # Use -1e4 for FP16 compatibility
+        logits = logits.masked_fill(mask_visited, -1e9)  # Use -1e9 instead of -1e4
 
         return logits
 
     def forward_teacher_forced(self, x, target_idx, edge_feats=None):
-
         """
-
         x: (B,N,d_in); target_idx: (B,N) indices 0..N-1 of the true sequence
-
         Returns CE loss (teacher forcing).
-
         """
-
-        B,N,_ = x.shape
-
+        B, N, _ = x.shape
         device = x.device
 
         # Check input features
@@ -175,38 +162,21 @@ class PointerTransformer(nn.Module):
         H = self.encode(x)
         
         # Start token
-
-        tgt = self.query_start.expand(B,1,-1)
-
+        tgt = self.query_start.expand(B, 1, -1)
         loss = 0.0
-
         mask_visited = torch.zeros(B, N, dtype=torch.bool, device=device)
-
         valid_steps = 0
+        last_node_idx = None  # No previous node for first step
 
         for t in range(N):
-
-            logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-
+            logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats, last_node_idx=last_node_idx)
+            
             y = target_idx[:, t]
             
-            # Convert to one-hot for label smoothing
-            num_classes = logits.size(-1)
-            y_one_hot = torch.zeros(logits.size(0), num_classes, device=logits.device)
-            y_one_hot.scatter_(1, y.unsqueeze(1), 1.0)
+            # Simple cross-entropy loss (remove label smoothing for now)
+            step_loss = F.cross_entropy(logits, y, reduction='mean')
             
-            # Apply label smoothing ONLY to unvisited nodes
-            unvisited_mask = ~mask_visited
-            smoothing_weight = 0.05
-            y_one_hot = y_one_hot * (1 - smoothing_weight) + (smoothing_weight / unvisited_mask.sum(dim=1, keepdim=True).float()) * unvisited_mask.float()
-            
-            # Compute cross-entropy loss with smoothed one-hot targets
-            # No need to clone - we can mask in-place since decode_step already masked
-            log_probs = F.log_softmax(logits, dim=-1)
-            
-            step_loss = -(y_one_hot * log_probs).sum(dim=-1).mean()
-            
-            # Skip if loss is invalid (should be rare with proper initialization)
+            # Skip if loss is invalid
             if torch.isfinite(step_loss):
                 loss += step_loss
                 valid_steps += 1
@@ -215,6 +185,9 @@ class PointerTransformer(nn.Module):
             mask_visited = mask_visited.scatter(1, chosen.unsqueeze(1), True)
             next_embed = H[torch.arange(B, device=device), chosen]
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
+            
+            # Update last_node_idx for next iteration
+            last_node_idx = chosen
 
         if valid_steps == 0:
             return torch.tensor(1e6, device=device, requires_grad=True)
@@ -223,97 +196,38 @@ class PointerTransformer(nn.Module):
 
     @torch.no_grad()
 
+    @torch.no_grad()
     def greedy_decode(self, x, edge_feats=None):
-
-        B,N,_ = x.shape
-
+        B, N, _ = x.shape
         device = x.device
 
         H = self.encode(x)
-
-        tgt = self.query_start.expand(B,1,-1)
-
+        tgt = self.query_start.expand(B, 1, -1)
         mask_visited = torch.zeros(B, N, dtype=torch.bool, device=device)
-
         seq = []
+        last_node_idx = None  # No previous node for first step
 
         for step in range(N):
-
-            logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats)
-
-            choice = torch.argmax(logits, dim=1)  # (B,)
+            logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats, last_node_idx=last_node_idx)
             
-            # Convert to scalar for batch size 1, keep tensor for batch > 1
-            if B == 1:
-                # Explicitly convert to Python int
-                if choice.numel() == 1:
-                    choice_val = int(choice.item())
-                else:
-                    choice_val = int(choice[0].item())
-                seq.append(choice_val)
-                choice_tensor = choice  # Keep tensor for indexing
-            else:
-                seq.append(choice)
-                choice_tensor = choice
-
-            # Update mask - use tensor version for scatter
-            mask_visited = mask_visited.scatter(1, choice_tensor.unsqueeze(1), True)
-
-            # Get next embedding - use tensor version for indexing
-            next_embed = H[torch.arange(B, device=device), choice_tensor]  # (B,D)
-
+            choice = torch.argmax(logits, dim=1)  # (B,)
+            seq.append(choice)
+            
+            # Update mask
+            mask_visited = mask_visited.scatter(1, choice.unsqueeze(1), True)
+            
+            # Get next embedding
+            next_embed = H[torch.arange(B, device=device), choice]  # (B,D)
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
             
-            # Safety check: if we've visited all nodes, break early
+            # Update last_node_idx for next iteration
+            last_node_idx = choice
+            
+            # Safety check
             if mask_visited.all():
                 break
 
-        # Convert to tensor properly - ensure we have exactly N items
-        if len(seq) != N:
-            print(f"Warning: greedy_decode produced {len(seq)} items but expected {N}")
-        
-        if B == 1:
-            # Ensure seq is a flat list of integers - add debug
-            if len(seq) > 0 and not isinstance(seq[0], (int, float)):
-                print(f"Error: seq contains non-scalar values! First item type: {type(seq[0])}, value: {seq[0]}")
-            
-            seq_flat = [int(s) for s in seq]  # Force all to int
-            
-            # Create tensor explicitly as 1D
-            try:
-                seq_tensor = torch.tensor(seq_flat, dtype=torch.long, device=device)  # Should be (N,)
-            except Exception as e:
-                print(f"Error creating tensor from seq_flat: {e}")
-                print(f"  seq_flat type: {type(seq_flat)}, length: {len(seq_flat)}")
-                print(f"  First few items: {seq_flat[:5]}")
-                raise
-            
-            # Debug: check shape immediately after creation
-            if seq_tensor.dim() != 1:
-                print(f"Error: seq_tensor has {seq_tensor.dim()} dimensions after creation! Shape: {seq_tensor.shape}")
-                print(f"  seq_flat was: {seq_flat[:10]}...")
-                # Force flatten
-                seq_tensor = seq_tensor.flatten()
-            
-            if seq_tensor.shape[0] != N:
-                print(f"Error: Sequence tensor has shape {seq_tensor.shape}, expected ({N},)")
-                print(f"  len(seq)={len(seq)}, N={N}")
-                # Truncate or pad to correct size
-                if seq_tensor.shape[0] > N:
-                    seq_tensor = seq_tensor[:N]
-                else:
-                    padding = torch.zeros(N - seq_tensor.shape[0], dtype=torch.long, device=device)
-                    seq_tensor = torch.cat([seq_tensor, padding])
-            
-            seq_tensor = seq_tensor.unsqueeze(0)  # (1, N)
-            
-            # Final check before return
-            if seq_tensor.shape != (1, N):
-                print(f"Error: Final tensor shape is {seq_tensor.shape}, expected (1, {N})")
-                print(f"  Forcing reshape to (1, {N})")
-                seq_tensor = seq_tensor.view(1, N)
-        else:
-            # Handle batch size > 1
-            seq_tensor = torch.stack(seq, dim=1)  # (B,N)
+        # Stack sequence
+        seq_tensor = torch.stack(seq, dim=1)  # (B, N)
         
         return seq_tensor
