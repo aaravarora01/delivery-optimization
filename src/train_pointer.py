@@ -417,10 +417,23 @@ def main():
                 
                 # Ensure correct shape: should be (B, N, d_model)
                 if X.dim() == 2:
+                    # X is (N, d) - add batch dimension
                     X = X.unsqueeze(0)
-                elif X.shape[0] != coords.shape[0]:
-                    # Batch dimension is wrong - reshape
-                    X = X.view(coords.shape[0], coords.shape[1], -1)
+                elif X.dim() == 3:
+                    # X is 3D, check if dimensions are correct
+                    if X.shape[0] == X.shape[1] and X.shape[0] != coords.shape[0]:
+                        # GNN output is (N, N, d) instead of (B, N, d) - extract diagonal
+                        N = X.shape[0]
+                        X = X[torch.arange(N), torch.arange(N), :]  # Extract diagonal: (N, d)
+                        X = X.unsqueeze(0)  # Add batch: (1, N, d)
+                    elif X.shape[0] != coords.shape[0]:
+                        # Batch size mismatch but not (N, N, d) case
+                        X = X[:coords.shape[0]]  # Take first B batches
+                
+                # Final check
+                expected_shape = (coords.shape[0], coords.shape[1], args.d_model)
+                if X.shape != expected_shape:
+                    raise ValueError(f"GNN output shape {X.shape} doesn't match expected {expected_shape}")
                 
                 del adj  # Free memory
             
