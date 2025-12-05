@@ -261,20 +261,21 @@ def train(args):
             except Exception as e:
                 print(f"Warning: Evaluation failed: {e}")
                 continue
+        
+        # Print epoch summary once after evaluating all zones
+        if eval_metrics:
+            agg_metrics = aggregate_metrics(eval_metrics)
+            tau = agg_metrics.get('kendall_tau_mean', 0.0)
+            kendall_taus.append(tau)
+            eval_epochs.append(epoch)  # Track which epoch this corresponds to
             
-            if eval_metrics:
-                agg_metrics = aggregate_metrics(eval_metrics)
-                tau = agg_metrics.get('kendall_tau_mean', 0.0)
-                kendall_taus.append(tau)
-                eval_epochs.append(epoch)  # Track which epoch this corresponds to
-                
-                print(f"Epoch {epoch:3d}/{args.epochs}: Loss={avg_loss:.6f}, Kendall τ={tau:.4f}")
-            else:
-                print(f"Epoch {epoch:3d}/{args.epochs}: Loss={avg_loss:.6f}, Kendall τ=N/A")
-            
-            model.train()
-            if gnn:
-                gnn.train()
+            print(f"Epoch {epoch:3d}/{args.epochs}: Loss={avg_loss:.6f}, Kendall τ={tau:.4f}")
+        else:
+            print(f"Epoch {epoch:3d}/{args.epochs}: Loss={avg_loss:.6f}, Kendall τ=N/A")
+        
+        model.train()
+        if gnn:
+            gnn.train()
     
     # Final evaluation
     model.eval()
