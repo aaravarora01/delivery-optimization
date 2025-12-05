@@ -131,14 +131,9 @@ class PointerTransformer(nn.Module):
         logits = torch.einsum("bd,bnd->bn", q, keys) / math.sqrt(keys.size(-1))  # (B, N)
 
         if self.edge_bias is not None and edge_feats is not None and last_node_idx is not None:
-            B = H.shape[0]
+            B = H.shape[0]  # Get B from H here, not as a parameter
             bias_full = self.edge_bias(edge_feats)  # (B, N, N)
             bias = bias_full[torch.arange(B, device=H.device), last_node_idx, :]  # (B, N)
-            
-            # DEBUG: Print once to verify edge bias is working
-            if t == 1 and torch.rand(1).item() < 0.01:
-                print(f"  Edge bias active: bias range [{bias.min():.3f}, {bias.max():.3f}]")
-            
             bias = torch.clamp(bias, min=-10.0, max=10.0)
             logits = logits + bias
 
@@ -222,6 +217,8 @@ class PointerTransformer(nn.Module):
     @torch.no_grad()
 
     @torch.no_grad()
+    @torch.no_grad()
+    @torch.no_grad()
     def greedy_decode(self, x, edge_feats=None):
         B, N, _ = x.shape
         device = x.device
@@ -230,10 +227,23 @@ class PointerTransformer(nn.Module):
         tgt = self.query_start.expand(B, 1, -1)
         mask_visited = torch.zeros(B, N, dtype=torch.bool, device=device)
         seq = []
-        last_node_idx = None  # No previous node for first step
+        last_node_idx = None
+
+        # DEBUG: Track first few predictions
+        debug_info = []
 
         for step in range(N):
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats, last_node_idx=last_node_idx)
+            
+            # DEBUG: Save info for first 3 steps
+            if step < 3:
+                debug_info.append({
+                    'step': step,
+                    'logits_min': logits.min().item(),
+                    'logits_max': logits.max().item(),
+                    'logits_std': logits.std().item(),
+                    'num_unmasked': (~mask_visited).sum().item()
+                })
             
             choice = torch.argmax(logits, dim=1)  # (B,)
             seq.append(choice)
@@ -242,15 +252,29 @@ class PointerTransformer(nn.Module):
             mask_visited = mask_visited.scatter(1, choice.unsqueeze(1), True)
             
             # Get next embedding
-            next_embed = H[torch.arange(B, device=device), choice]  # (B,D)
+            next_embed = H[torch.arange(B, device=device), choice]
             tgt = torch.cat([tgt, next_embed.unsqueeze(1)], dim=1)
             
             # Update last_node_idx for next iteration
             last_node_idx = choice
             
-            # Safety check
             if mask_visited.all():
                 break
+        
+        # DEBUG: Print occasionally
+        if torch.rand(1).item() < 0.02:  # 2% of the time
+            print(f"\n=== GREEDY DECODE DEBUG ===")
+            for info in debug_info:
+                print(f"  Step {info['step']}: logits [{info['logits_min']:.2f}, {info['logits_max']:.2f}], "
+                    f"std={info['logits_std']:.2f}, unmasked={info['num_unmasked']}")
+            print(f"  Final sequence (first 10): {[s.item() for s in seq[:10]]}")
+            print(f"  Sequence length: {len(seq)}, expected: {N}")
+            
+            # Check if sequential
+            seq_list = [s.item() for s in seq]
+            is_sequential = (seq_list == list(range(len(seq_list))))
+            print(f"  Is sequential [0,1,2,...]? {is_sequential}")
+            print("="*30 + "\n")
 
         # Stack sequence
         seq_tensor = torch.stack(seq, dim=1)  # (B, N)
