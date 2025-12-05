@@ -74,7 +74,6 @@ def solve_route(df_route: pd.DataFrame, return_to_start=False):
     return out, dist_km
 
 def kendall_tau(pred_order: List[int], true_order: List[int]) -> float:
-    # simple tau calculation without scipy
     n = len(pred_order)
     pos = {sid:i for i, sid in enumerate(pred_order)}
     concord, discord = 0, 0

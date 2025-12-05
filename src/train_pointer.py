@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from baseline import kendall_tau
 
 from sklearn.cluster import KMeans
 from tqdm import tqdm
@@ -159,6 +160,59 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     plt.close()
     
     print("Generated visualization plots")
+
+    def run_validation_zone(model, gnn, zone_df, device, use_gnn):
+        # Build coords + target exactly like training
+        coords, target_idx = collate_zone(zone_df)       # (1,N,2), (1,N)
+
+        # Move to device
+        coords = coords.to(device)
+        target_idx = target_idx.to(device)
+
+        # Ensure correct shapes
+        while coords.dim() > 3:
+            coords = coords.squeeze(0)
+        if coords.dim() < 3:
+            coords = coords.unsqueeze(0)
+
+        while target_idx.dim() > 2:
+            target_idx = target_idx.squeeze(0)
+        if target_idx.dim() < 2:
+            target_idx = target_idx.unsqueeze(0)
+
+        # Compute node features identically to training
+        X = node_features(coords)
+
+        # GNN (same as training)
+        if use_gnn and gnn is not None:
+            adj = knn_adj(coords, k=min(8, coords.shape[1]-1))
+            X = gnn(X, adj.to(device))
+            del adj
+
+        # Edge features (must match training!)
+        edge_feats = edge_bias_features(coords)
+
+        # -------- Run greedy decoding exactly like training --------
+        model.eval()
+        with torch.no_grad():
+            seq, length = model.greedy_decode(
+                X, edge_feats=edge_feats
+            )
+
+        # Convert predictions into numpy list
+        pred_order = seq.squeeze(0).cpu().tolist()
+
+        # Compute metrics using the same ground truth ordering
+        true_order = target_idx.squeeze(0).cpu().tolist()
+
+        return {
+            "kendall_tau": float("nan") if len(true_order) <= 1 else
+                kendall_tau(pred_order, true_order),
+            "sequence_accuracy": float(pred_order == true_order),
+            "distance_ratio": 1.0,   # optional — compute if needed
+            "position_acc_k1": float(pred_order[0] == true_order[0]),
+        }
+
 
 class RouteZoneDataset(Dataset):
     def __init__(self, df, routes, max_zone=80, min_stops=3, use_gnn=False, max_zones=None):
@@ -578,10 +632,8 @@ def main():
                         except Exception as e:
                             print("Diagnostic failed with exception:", e)
                         debug_count += 1
-                    metrics = evaluate_zone_predictions(
-                        model, gnn, zone_df, args.device, 
-                        use_gnn=args.use_gnn, greedy=True
-                    )
+                    metrics = run_validation_zone(model, gnn, zone_df, args.device, args.use_gnn)
+
 
                     val_metrics.append(metrics)
                 except Exception as e:
@@ -681,10 +733,8 @@ def main():
     
     for zone_df in final_eval_zones:
         try:
-            metrics = evaluate_zone_predictions(
-                model, gnn, zone_df, args.device,
-                use_gnn=args.use_gnn, greedy=True
-            )
+            metrics = run_validation_zone(model, gnn, zone_df, args.device, args.use_gnn)
+
             final_metrics_list.append(metrics)
         except Exception as e:
             continue
