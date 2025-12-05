@@ -159,7 +159,7 @@ def create_visualizations(training_metrics, final_metrics, output_dir, val_eval_
     print("Generated visualization plots")
 
 class RouteZoneDataset(Dataset):
-    def __init__(self, df, routes, max_zone=80, min_stops=3):
+    def __init__(self, df, routes, max_zone=80, min_stops=3, max_zones=None):
         self.df = df
         self.routes = routes
         self.max_zone = max_zone
@@ -173,6 +173,13 @@ class RouteZoneDataset(Dataset):
             for z in route_zones:
                 if len(z) >= min_stops:
                     self.zones.append(z)
+                    
+                    # Stop if we've reached the limit
+                    if max_zones is not None and len(self.zones) >= max_zones:
+                        break
+            # Break outer loop if limit reached
+            if max_zones is not None and len(self.zones) >= max_zones:
+                break
         
         print(f"Created {len(self.zones)} zones from {len(routes)} routes")
     
@@ -262,7 +269,7 @@ def main():
     print(f"Split: {len(train_routes)} training routes, {len(val_routes)} validation routes")
     
     # Create datasets
-    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3)
+    train_dataset = RouteZoneDataset(df, train_routes, max_zone=args.max_zone, min_stops=3, max_zones=args.max_zones)
     val_dataset = RouteZoneDataset(df, val_routes, max_zone=args.max_zone, min_stops=3)
     
     print(f"Training zones: {len(train_dataset.zones)}, Validation zones: {len(val_dataset.zones)}")
