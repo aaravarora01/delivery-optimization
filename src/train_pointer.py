@@ -52,11 +52,21 @@ def build_zones(df_route, max_zone=80, seed=0):
     return zones
 
 def collate_zone(zone_df):
+    # CRITICAL: Ensure zone_df is in encoder order (reset index but don't sort)
+    # The order of zone_df determines encoder order (node 0, 1, 2, ..., N-1)
+    zone_df = zone_df.reset_index(drop=True).copy()
+    
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32).unsqueeze(0)  # (1,N,2)
     
-    # target index by true seq
-    sid_to_pos = {sid:i for i,sid in enumerate(zone_df['stop_id'].tolist())}
-    true_order = [sid_to_pos[sid] for sid in zone_df.sort_values('seq')['stop_id'].tolist()]
+    # target index by true seq - map to encoder order (positions in zone_df)
+    # sid_to_pos maps stop_id -> encoder position (0, 1, 2, ..., N-1)
+    sid_to_pos = {sid: i for i, sid in enumerate(zone_df['stop_id'].tolist())}
+    
+    # Get true sequence order (sorted by 'seq' column)
+    true_sequence_stop_ids = zone_df.sort_values('seq')['stop_id'].tolist()
+    
+    # Map true sequence to encoder positions
+    true_order = [sid_to_pos[sid] for sid in true_sequence_stop_ids]
     target_idx = torch.tensor(true_order, dtype=torch.long).unsqueeze(0)  # (1,N)
     
     return coords, target_idx
@@ -376,6 +386,8 @@ def main():
         step_count = 0
         
         for batch_idx, (coords, target_idx) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch}/{args.epochs}")):
+            if batch_idx == 0:
+                print(f"Processing first batch: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
             coords = coords.to(args.device)
             target_idx = target_idx.to(args.device)
@@ -395,6 +407,9 @@ def main():
             # Ensure target_idx is exactly 2D (B, N)
             if target_idx.dim() < 2:
                 target_idx = target_idx.unsqueeze(0)
+            
+            if batch_idx == 0:
+                print(f"After squeezing: coords shape={coords.shape}, target_idx shape={target_idx.shape}")
             
             # Features
             X = node_features(coords)
@@ -418,6 +433,8 @@ def main():
             
             # Check for invalid loss
             if torch.isnan(loss) or torch.isinf(loss):
+                if batch_idx < 5:  # Only print first few for debugging
+                    print(f"Warning: Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 del loss
                 continue
             

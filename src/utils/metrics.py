@@ -105,15 +105,18 @@ def evaluate_zone_predictions(
     from utils.features import node_features, edge_bias_features
     from utils.knn_graph import knn_adj
     
-    # Reset index to ensure proper indexing
+    # CRITICAL: Reset index but preserve order - this is the encoder order
+    # DO NOT sort - the order of zone_df determines encoder indices (0, 1, 2, ..., N-1)
     zone_df = zone_df.reset_index(drop=True).copy()
     if len(zone_df) < 2:
         raise ValueError("Zone has fewer than 2 stops; cannot evaluate.")
     
+    # Create coords in encoder order (order of zone_df)
     coords = torch.tensor(zone_df[['lat','lon']].to_numpy(), dtype=torch.float32, device=device).unsqueeze(0)
     
     # Get features
     X = node_features(coords)
+    print(f"DEBUG: X shape after node_features: {X.shape}")
     if use_gnn and gnn is not None:
         # Ensure coords is 3D for knn_adj
         coords_3d = coords
@@ -133,20 +136,12 @@ def evaluate_zone_predictions(
             X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
         
         X = gnn(X, adj.to(device))
-
-        # GNN should output (B, N, d_model)
-        # Ensure X has correct shape: (1, N, d_model)
+        
+        # Ensure X is still 3D after GNN
         if X.dim() == 2:
-            # X is (N, d) - add batch dimension
             X = X.unsqueeze(0)
-        elif X.dim() == 3:
-            # X is (B, N, d) - ensure B=1
-            if X.shape[0] != 1:
-                X = X[:1]  # Take first batch if multiple
-
-        # Final verification
-        if X.dim() != 3 or X.shape[0] != 1:
-            raise ValueError(f"GNN output shape error: got {X.shape}, expected (1, N, d_model)")
+            
+        print(f"DEBUG: X shape after GNN: {X.shape}")
     
     edge_feats = edge_bias_features(coords)
     
@@ -165,11 +160,11 @@ def evaluate_zone_predictions(
     if invalid_indices:
         raise ValueError(f"Invalid indices in prediction: {invalid_indices[:5]}... (zone size: {num_stops})")
     
-    # Get stop_ids in predicted and true order
-    stop_ids = zone_df['stop_id'].tolist()
-    pred_stop_ids = [stop_ids[i] for i in pred_order_indices]
+    # Get stop_ids in encoder order (same order as zone_df)
+    stop_ids = zone_df['stop_id'].tolist()  # This is encoder order
+    pred_stop_ids = [stop_ids[i] for i in pred_order_indices]  # Map predictions to stop_ids
     
-    # Get true order (by sequence)
+    # Get true order (by sequence) - this is the ground truth sequence
     true_sorted = zone_df.sort_values('seq').reset_index(drop=True)
     true_stop_ids = true_sorted['stop_id'].tolist()
     
