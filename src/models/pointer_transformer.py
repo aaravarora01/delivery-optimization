@@ -131,6 +131,8 @@ class PointerTransformer(nn.Module):
         tgt_mask = torch.triu(torch.ones(T, T, device=tgt.device), diagonal=1).bool()
 
         D = self.decoder(tgt, H, tgt_mask=tgt_mask)  # (B,T,D)
+        # Add clipping for numerical stability
+        D = torch.clamp(D, min=-1e4, max=1e4)
         assert torch.isfinite(D).all(), "NaN/inf in decoder output D"
 
         q = self.out_proj(D[:, -1])  # (B,D) last step

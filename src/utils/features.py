@@ -93,5 +93,10 @@ def edge_bias_features(coords):
 
     same = torch.zeros((B,N,N), device=coords.device)  # placeholder; can be filled if street data exists
 
-    return torch.stack([dist, dtheta, same], dim=-1)
+    edge_feats = torch.stack([dist, dtheta, same], dim=-1)
+    
+    # Final clipping for numerical stability - prevent extreme values
+    edge_feats = torch.clamp(edge_feats, min=-1e3, max=1e3)
+    
+    return edge_feats
 
