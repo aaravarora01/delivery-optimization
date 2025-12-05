@@ -179,13 +179,20 @@ class PointerTransformer(nn.Module):
         for t in range(N):
             logits = self.decode_step(H, tgt, mask_visited, edge_feats=edge_feats, last_node_idx=last_node_idx)
             
-            # Verify shapes
-            assert logits.shape == (B, N), f"Logits shape: {logits.shape}, expected ({B}, {N})"
+            y = target_idx[:, t]
             
-            y = target_idx[:, t]  # (B,)
-            assert y.shape == (B,), f"Target shape: {y.shape}, expected ({B},)"
+            # DEBUG: Check if model is just memorizing position
+            if t == 0 and torch.rand(1).item() < 0.01:
+                predicted = torch.argmax(logits, dim=1).item()
+                actual = y.item()
+                print(f"\n  TRAINING Step 0: predicted={predicted}, actual={actual}, match={predicted==actual}")
+                print(f"    Logits: min={logits.min():.2f}, max={logits.max():.2f}, std={logits.std():.2f}")
+                print(f"    Logit at actual position: {logits[0, actual]:.2f}")
+                
+                # Check if logits are all similar (random)
+                if logits.std() < 0.5:
+                    print(f"    WARNING: Logits have very low variance - model may not be learning!")
             
-            # Simple cross-entropy loss
             step_loss = F.cross_entropy(logits, y, reduction='mean')
             
             # Skip if loss is invalid
