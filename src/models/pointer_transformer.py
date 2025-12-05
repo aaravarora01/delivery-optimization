@@ -181,27 +181,7 @@ class PointerTransformer(nn.Module):
             
             y = target_idx[:, t]
             
-            # DEBUG: Check if model is just memorizing position
-            if t == 0 and torch.rand(1).item() < 0.05:  # 5% of batches
-                predicted = torch.argmax(logits, dim=1).item()
-                actual = y.item()
-                
-                # Get logits distribution
-                unmasked_mask = ~mask_visited[0]
-                logits_unmasked = logits[0][unmasked_mask]
-                
-                print(f"\n  TRAINING Step 0:")
-                print(f"    Predicted={predicted}, Actual={actual}, Match={predicted==actual}")
-                print(f"    Logits: min={logits.min():.2f}, max={logits.max():.2f}, std={logits.std():.2f}")
-                print(f"    Unmasked logits std: {logits_unmasked.std():.2f}")
-                print(f"    Step loss: {step_loss.item():.4f}")
-                
-                if logits_unmasked.std() < 0.5:
-                    print(f"    WARNING: Very low logit variance - model not learning structure!")
-                
-                # Check if logits are all similar (random)
-                if logits.std() < 0.5:
-                    print(f"    WARNING: Logits have very low variance - model may not be learning!")
+            
             
             step_loss = F.cross_entropy(logits, y, reduction='mean')
             
