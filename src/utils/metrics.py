@@ -126,21 +126,43 @@ def evaluate_zone_predictions(
         if adj.dim() == 2:
             adj = adj.unsqueeze(0)
         
+        # Ensure X has batch dimension before GNN
         if X.dim() == 2:
-            X = X.unsqueeze(0)
+            X = X.unsqueeze(0)  # (N, d) -> (1, N, d)
         
-        X = gnn(X, adj.to(device))
+        # Apply GNN
+        X_gnn = gnn(X, adj.to(device))
         
-        if X.dim() == 2:
-            X = X.unsqueeze(0)
-        elif X.dim() == 3 and X.shape[0] != coords.shape[0]:
-            if X.shape[0] == X.shape[1]:
-                X = X[0:1]
+        # CRITICAL: Ensure GNN output maintains correct shape (1, N, d_model)
+        # GNN should output (B, N, d_model) but might output (N, N, d_model) or (N, d_model)
+        if X_gnn.dim() == 2:
+            # (N, d) -> (1, N, d)
+            X_gnn = X_gnn.unsqueeze(0)
+        elif X_gnn.dim() == 3:
+            if X_gnn.shape[0] != X.shape[0]:
+                # If batch dimension is wrong, check if it's (N, N, d) instead of (1, N, d)
+                if X_gnn.shape[0] == X_gnn.shape[1]:
+                    # Shape is (N, N, d) - take first row and add batch dim
+                    X_gnn = X_gnn[0:1, :, :]  # Take first N nodes, add batch dim
+                else:
+                    # Unexpected shape, try to fix
+                    X_gnn = X_gnn[:1]  # Take first batch
+        
+        # Final check: X should be (1, N, d_model) where N matches coords
+        if X_gnn.shape[0] != 1 or X_gnn.shape[1] != coords.shape[1]:
+            raise ValueError(f"GNN output shape mismatch: got {X_gnn.shape}, expected (1, {coords.shape[1]}, d_model)")
+        
+        X = X_gnn
     
     edge_feats = edge_bias_features(coords)
     
     # Decode
     with torch.no_grad():
+        # Ensure model is in eval mode
+        model.eval()
+        if gnn is not None:
+            gnn.eval()
+            
         pred_order_indices = model.greedy_decode(X, edge_feats=edge_feats)
         pred_order_indices = pred_order_indices.reshape(-1).cpu().numpy().tolist()
     
